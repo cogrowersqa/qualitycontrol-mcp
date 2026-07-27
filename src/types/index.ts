@@ -40,9 +40,11 @@ export interface ApiResponse<T = unknown> {
   endpoint?: string;
   total?: number;
   total_lecturas?: number;
+  total_lecturas_porciones_frio?: number;
   dispositivos?: T;
   historial?: T;
   lecturas?: T;
+  lecturas_porciones_frio?: T;
   rango?: { fecha_desde: string; fecha_hasta: string };
 }
 
@@ -50,10 +52,12 @@ export interface ApiResponse<T = unknown> {
 export interface Device {
   codigo_dispositivo: string;
   nombre_dispositivo: string;
+  empresa: string;
   campo: string | null;
   temperatura_actual: number | null;
   humedad_actual: number | null;
   horas_frio_acumuladas: number;
+  fecha_horas_frio?: string | null;
   porciones_frio_acumuladas: number;
   latitud: number | null;
   longitud: number | null;
@@ -65,6 +69,14 @@ export interface HistoryEntry {
   codigo_dispositivo: string;
   temperatura: number;
   humedad: number;
+  horas_frio: number;
+  fecha: string;
+}
+
+/** Entrada de porciones de frío por hora */
+export interface PorcionesFrioEntry {
+  codigo_dispositivo: string;
+  porciones_frio: number;
   fecha: string;
 }
 
@@ -79,43 +91,7 @@ export interface WeatherData {
   fecha?: string;
 }
 
-/** Datos de bins */
-export interface BinsData {
-  total: number;
-  por_variedad?: Array<{ variedad: string; cantidad: number; kilos: number }>;
-  fecha?: string;
-}
 
-/** Datos de cosecha */
-export interface HarvestData {
-  variedad?: string;
-  temporada?: string;
-  total_kilos: number;
-  total_bins: number;
-  kilos_hoy?: number;
-  bins_hoy?: number;
-  rendimiento_promedio?: number;
-  porcentaje_avance?: number;
-  ultima_actualizacion?: string;
-}
-
-/** Datos de exportaciones */
-export interface ExportsData {
-  total_kilos: number;
-  destinos?: Array<{ destino: string; kilos: number }>;
-  fecha_inicio?: string;
-  fecha_fin?: string;
-}
-
-/** Datos de despachos */
-export interface Dispatch {
-  id: number | string;
-  destino: string;
-  kilos: number;
-  estado: string;
-  fecha: string;
-  variedad?: string;
-}
 
 /** Resultado de un tool */
 export interface ToolResult {

@@ -3,10 +3,6 @@ import { disconnectCompanyTool } from "./disconnect_company.js";
 import { getDevicesTool } from "./get_devices.js";
 import { getSensorHistoryTool } from "./get_sensor_history.js";
 import { getWeatherTool } from "./get_weather.js";
-import { getBinsTodayTool } from "./get_bins_today.js";
-import { getHarvestTool } from "./get_harvest.js";
-import { getExportsTool } from "./get_exports.js";
-import { getDispatchesTool } from "./get_dispatches.js";
 import { companyInfoTool } from "./company_info.js";
 import { healthcheckTool } from "./healthcheck.js";
 import type { ToolResult } from "../types/index.js";
@@ -37,10 +33,6 @@ export const tools: McpToolDefinition[] = [
   getDevicesTool as unknown as McpToolDefinition,
   getSensorHistoryTool as unknown as McpToolDefinition,
   getWeatherTool as unknown as McpToolDefinition,
-  getBinsTodayTool as unknown as McpToolDefinition,
-  getHarvestTool as unknown as McpToolDefinition,
-  getExportsTool as unknown as McpToolDefinition,
-  getDispatchesTool as unknown as McpToolDefinition,
   companyInfoTool as unknown as McpToolDefinition,
   healthcheckTool as unknown as McpToolDefinition,
 ];

@@ -24,7 +24,7 @@ export class SessionManager {
 
     if (existing) {
       sessionStore.touch(existing.sessionId);
-      logger.info(`Sesión reutilizada: ${existing.sessionId}`);
+      logger.info(`Sesión reutilizada: ${existing.sessionId} (empresa: ${existing.companyName})`);
       return existing;
     }
 
@@ -70,6 +70,24 @@ export class SessionManager {
   }
 
   /**
+   * Desconecta TODAS las sesiones activas.
+   * Garantiza que no queda ningún estado residual de empresa anterior.
+   * Usado en logout completo.
+   */
+  disconnectAll(): number {
+    let count = 0;
+    const allActive = sessionStore.getAllActiveSessions();
+    for (const session of allActive) {
+      sessionStore.revoke(session.sessionId);
+      count++;
+    }
+    if (count > 0) {
+      logger.info(`Logout completo: ${count} sesión(es) revocadas`);
+    }
+    return count;
+  }
+
+  /**
    * Verifica si hay una sesión activa.
    */
   hasActiveSession(): boolean {
@@ -77,15 +95,12 @@ export class SessionManager {
   }
 
   /**
-   * Cambia de empresa: revoca la sesión actual.
+   * Cambia de empresa: revoca TODAS las sesiones activas.
    * El usuario deberá proporcionar nueva API Key.
    */
   switchCompany(): void {
-    const current = sessionStore.getActiveSession();
-    if (current) {
-      sessionStore.revoke(current.sessionId);
-      logger.info("Cambio de empresa: sesión anterior revocada");
-    }
+    this.disconnectAll();
+    logger.info("Cambio de empresa: todas las sesiones revocadas");
   }
 
   /**

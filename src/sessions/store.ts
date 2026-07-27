@@ -104,6 +104,20 @@ class SessionStore {
   }
 
   /**
+   * Obtiene TODAS las sesiones activas.
+   * Usado en disconnectAll() para garantizar limpieza total.
+   */
+  getAllActiveSessions(): Session[] {
+    const result: Session[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.status === "active" && new Date(session.expiresAt) >= new Date()) {
+        result.push(session);
+      }
+    }
+    return result;
+  }
+
+  /**
    * Renueva el acceso de una sesión (sliding expiration).
    */
   touch(sessionId: string): void {

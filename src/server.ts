@@ -28,6 +28,8 @@ import { tools, executeTool } from "./tools/index.js";
 import { logger } from "./logger/index.js";
 import { apiClient } from "./api/client.js";
 import { sessionManager } from "./sessions/manager.js";
+import { isTokenRevoked, associateToken, clearRevoked, shouldForceReAuth, revokeAllTokens } from "./auth/token-store.js";
+import { cacheManager } from "./cache/manager.js";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
@@ -184,26 +186,29 @@ app.get("/authorize", (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgroClimate — Conectar empresa</title>
+  <title>AgroClimate</title>
+  <link rel="icon" type="image/png" href="https://cogrowers.cl/img/isotipo.png" />
+  <link rel="shortcut icon" href="https://cogrowers.cl/img/isotipo.png" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-    .card { background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); padding: 40px; max-width: 420px; width: 100%; }
-    h1 { font-size: 1.5rem; color: #1a5d1a; margin-bottom: 8px; }
-    p { color: #666; font-size: 0.9rem; margin-bottom: 24px; line-height: 1.4; }
-    label { display: block; font-weight: 600; color: #333; margin-bottom: 6px; font-size: 0.9rem; }
-    input[type=password] { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 1rem; margin-bottom: 20px; }
-    input[type=password]:focus { outline: none; border-color: #1a5d1a; box-shadow: 0 0 0 3px rgba(26,93,26,0.1); }
-    button { width: 100%; padding: 12px; background: #1a5d1a; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }
-    button:hover { background: #145214; }
-    .error { background: #fef2f2; color: #991b1b; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 0.85rem; }
-    .info { font-size: 0.8rem; color: #999; margin-top: 16px; text-align: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #eaf4ff 0%, #dff0ff 100%); display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 16px; box-shadow: 0 8px 32px rgba(26,26,107,0.12); padding: 44px 40px; max-width: 420px; width: 100%; text-align: center; border-top: 4px solid #1a1a6b; }
+    .logo { margin-bottom: 22px; }
+    .logo img { height: 72px; }
+    p { color: #555; font-size: 0.9rem; margin-bottom: 24px; line-height: 1.5; text-align: left; }
+    p strong { color: #1a1a6b; }
+    label { display: block; font-weight: 600; color: #1a1a6b; margin-bottom: 6px; font-size: 0.9rem; text-align: left; }
+    input[type=password] { width: 100%; padding: 14px; border: 2px solid #d0d5e0; border-radius: 8px; font-size: 1rem; margin-bottom: 20px; transition: border-color 0.2s, box-shadow 0.2s; }
+    input[type=password]:focus { outline: none; border-color: #1a1a6b; box-shadow: 0 0 0 3px rgba(26,26,107,0.1); }
+    button { width: 100%; padding: 14px; background: #1a1a6b; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #12124a; }
+    .info { font-size: 0.8rem; color: #999; margin-top: 8px; text-align: center; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>🌿 AgroClimate</h1>
-    <p>Ingresa tu API Key para conectar tu empresa.<br>La puedes obtener desde el Portal Web en <strong>API para Clientes</strong>.</p>
+    <div class="logo"><img src="https://cogrowers.cl/img/logo.png" alt="COGROWERS" /></div>
+    <p>Ingresa tu API Key para conectar tu empresa.<br>La puedes obtener desde <strong>cogrowers.cl</strong> en la sección <strong>API</strong>.</p>
     <form method="POST" action="${escapeHtml(BASE_URL)}/authorize">
       <input type="hidden" name="client_id" value="${escapeHtml(client_id)}" />
       <input type="hidden" name="redirect_uri" value="${escapeHtml(redirect_uri)}" />
@@ -243,9 +248,9 @@ app.post("/authorize", async (req, res) => {
       return;
     }
 
-    // API Key válida — extraer info de empresa
-    const devices = (validation.dispositivos as unknown[]) ?? (validation.data as unknown[]) ?? [];
-    const companyName = (validation.empresa as string) ?? null;
+    // API Key válida — extraer info de empresa (viene dentro de cada dispositivo)
+    const devices = (validation.dispositivos as Array<{ empresa?: string }>) ?? (validation.data as unknown[]) ?? [];
+    const companyName = (Array.isArray(devices) && devices.length > 0 && devices[0].empresa) ? devices[0].empresa : null;
     const deviceCount = (validation.total as number) ?? devices.length;
 
     // Generar código de autorización con API Key incluida
@@ -317,6 +322,7 @@ app.post("/token", (req, res) => {
 function validateBearerToken(req: express.Request, res: express.Response): boolean {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    logger.debug("validateBearerToken: No hay Authorization header");
     const resourceMetadataUrl = `${BASE_URL}/.well-known/oauth-protected-resource`;
     res.status(401)
       .set("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl}"`)
@@ -326,14 +332,23 @@ function validateBearerToken(req: express.Request, res: express.Response): boole
 
   const token = authHeader.slice(7);
   const tokenData = accessTokens.get(token);
-  if (!tokenData || tokenData.expiresAt < Date.now()) {
+  const isRevoked = isTokenRevoked(token);
+  const forceReAuth = shouldForceReAuth();
+
+  if (!tokenData || tokenData.expiresAt < Date.now() || isRevoked || forceReAuth) {
+    logger.info(`validateBearerToken: Token rechazado [exists=${!!tokenData}, expired=${tokenData ? tokenData.expiresAt < Date.now() : 'N/A'}, revoked=${isRevoked}, forceReAuth=${forceReAuth}]`);
     accessTokens.delete(token);
+    clearRevoked(token);
     const resourceMetadataUrl = `${BASE_URL}/.well-known/oauth-protected-resource`;
     res.status(401)
       .set("WWW-Authenticate", `Bearer error="invalid_token", resource_metadata="${resourceMetadataUrl}"`)
       .json({ error: "invalid_token", error_description: "Token expired or invalid" });
     return false;
   }
+
+  // Log de contexto: qué empresa está usando este token
+  const activeSession = sessionManager.getActiveSession();
+  logger.debug(`validateBearerToken: OK [token_company=${tokenData.companyName}, active_session=${activeSession?.companyName ?? 'ninguna'}, session_id=${activeSession?.sessionId ?? 'N/A'}]`);
 
   return true;
 }
@@ -380,16 +395,36 @@ app.all("/mcp", async (req, res) => {
     const bearerToken = req.headers.authorization?.slice(7);
     if (bearerToken) {
       const tokenData = accessTokens.get(bearerToken);
-      if (tokenData?.apiKey && !sessionManager.hasActiveSession()) {
+      if (tokenData?.apiKey) {
         try {
-          sessionManager.connectCompany(
-            tokenData.apiKey,
-            tokenData.companyName ?? null,
-            null, // userName
-            null, // role
-            tokenData.deviceCount ?? 0
-          );
-          logger.info(`Auto-conectada empresa "${tokenData.companyName}" via OAuth`);
+          // Si hay sesión activa de OTRA empresa, revocarla primero
+          const existingSession = sessionManager.getActiveSession();
+          if (existingSession) {
+            const existingApiKey = sessionManager.getApiKey(existingSession.sessionId);
+            if (existingApiKey && existingApiKey !== tokenData.apiKey) {
+              // Empresa diferente: limpiar todo antes de conectar la nueva
+              logger.info(`Cambio de empresa detectado: revocando sesión anterior (${existingSession.companyName})`);
+              sessionManager.disconnectAll();
+            }
+          }
+
+          // Conectar la empresa del token (reutiliza si misma key, crea si nueva)
+          if (!sessionManager.hasActiveSession()) {
+            sessionManager.connectCompany(
+              tokenData.apiKey,
+              tokenData.companyName ?? null,
+              null, // userName
+              null, // role
+              tokenData.deviceCount ?? 0
+            );
+          }
+
+          // Asociar token con la sesión para poder revocarlo desde disconnect
+          const activeSession = sessionManager.getActiveSession();
+          if (activeSession) {
+            associateToken(activeSession.sessionId, bearerToken);
+          }
+          logger.info(`Auto-conectada empresa "${tokenData.companyName}" (${tokenData.deviceCount} dispositivos) via OAuth`);
         } catch (err) {
           logger.warn("Error auto-conectando empresa", { error: err instanceof Error ? err.message : String(err) });
         }
@@ -411,6 +446,55 @@ app.all("/mcp", async (req, res) => {
       res.status(500).json({ error: "Internal server error" });
     }
   }
+});
+
+// ─── Logout Endpoint ───────────────────────────────────────────────────────────
+
+/**
+ * POST /logout — Cierre de sesión completo.
+ * Revoca tokens, elimina sesiones, limpia caché.
+ * Garantiza que la próxima conexión requiera nueva API Key.
+ */
+app.post("/logout", (req, res) => {
+  const bearerToken = req.headers.authorization?.slice(7);
+
+  logger.info("=== LOGOUT INICIADO ===");
+
+  // 1. Revocar todas las sesiones internas
+  const revokedSessions = sessionManager.disconnectAll();
+  logger.info(`Logout: ${revokedSessions} sesión(es) revocadas`);
+
+  // 2. Revocar todos los tokens OAuth
+  revokeAllTokens();
+
+  // 3. Eliminar el token actual del mapa de acceso
+  if (bearerToken) {
+    accessTokens.delete(bearerToken);
+    logger.info(`Logout: Token eliminado de accessTokens`);
+  }
+
+  // 4. Limpiar TODO el caché
+  cacheManager.clear();
+  logger.info("Logout: Caché limpiado completamente");
+
+  // 5. Respuesta con headers anti-caché
+  res.set({
+    "Clear-Site-Data": '"cache", "cookies", "storage"',
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+  });
+
+  res.json({
+    logout_success: true,
+    message: "Sesión cerrada completamente. Debe autenticarse nuevamente.",
+    cleared: {
+      sessions: revokedSessions,
+      tokens: true,
+      cache: true,
+    },
+  });
+
+  logger.info("=== LOGOUT COMPLETADO ===");
 });
 
 // ─── Health check ──────────────────────────────────────────────────────────────
