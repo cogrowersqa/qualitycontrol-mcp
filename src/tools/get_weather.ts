@@ -1,0 +1,88 @@
+import { sessionManager } from "../sessions/manager.js";
+import { apiClient } from "../api/client.js";
+import { cacheManager } from "../cache/manager.js";
+import type { ToolResult, WeatherData } from "../types/index.js";
+
+export const getWeatherTool = {
+  name: "get_weather",
+  description:
+    "Obtiene información climática actual y pronóstico para la ubicación de la empresa. " +
+    "Incluye temperatura, humedad, viento y pronóstico.",
+  inputSchema: {
+    type: "object" as const,
+    properties: {
+      ubicacion: {
+        type: "string",
+        description: "Ubicación específica a consultar (opcional, usa la ubicación principal si no se indica).",
+      },
+    },
+    required: [],
+  },
+
+  async handler(params: { ubicacion?: string }): Promise<ToolResult> {
+    const session = sessionManager.getActiveSession();
+    if (!session) {
+      return {
+        content: [
+          { type: "text", text: "No hay empresa conectada. Usa connect_company primero." },
+        ],
+        isError: true,
+      };
+    }
+
+    const apiKey = sessionManager.getApiKey(session.sessionId);
+    if (!apiKey) {
+      return {
+        content: [{ type: "text", text: "Error al recuperar la sesión. Reconéctate." }],
+        isError: true,
+      };
+    }
+
+    const queryParams: Record<string, string> = {};
+    if (params.ubicacion) queryParams.ubicacion = params.ubicacion;
+
+    const cacheKey = cacheManager.buildKey(session.sessionId, "clima", queryParams);
+    const cached = cacheManager.get<WeatherData>(cacheKey);
+    if (cached) {
+      return { content: [{ type: "text", text: formatWeather(cached) }] };
+    }
+
+    const response = await apiClient.get<WeatherData>({
+      endpoint: "api_clientes_clima.php",
+      params: queryParams,
+      apiKey,
+    });
+
+    if (!response.success) {
+      return {
+        content: [{ type: "text", text: `Error al obtener clima: ${response.error}` }],
+        isError: true,
+      };
+    }
+
+    const weather = response.data;
+    if (weather) {
+      cacheManager.set(cacheKey, weather, 600); // Cache 10 minutos (clima cambia lento)
+    }
+
+    return { content: [{ type: "text", text: formatWeather(weather ?? {}) }] };
+  },
+};
+
+function formatWeather(data: WeatherData): string {
+  if (!data.temperatura && !data.humedad) {
+    return "No hay datos climáticos disponibles en este momento.";
+  }
+
+  let text = "**Información Climática**\n\n";
+
+  if (data.ubicacion) text += `📍 **Ubicación:** ${data.ubicacion}\n`;
+  if (data.fecha) text += `🕐 **Fecha:** ${data.fecha}\n`;
+  if (data.temperatura !== undefined) text += `🌡️ **Temperatura:** ${data.temperatura}°C\n`;
+  if (data.humedad !== undefined) text += `💧 **Humedad:** ${data.humedad}%\n`;
+  if (data.viento !== undefined) text += `💨 **Viento:** ${data.viento} km/h\n`;
+  if (data.presion !== undefined) text += `📊 **Presión:** ${data.presion} hPa\n`;
+  if (data.pronostico) text += `\n📋 **Pronóstico:** ${data.pronostico}\n`;
+
+  return text;
+}

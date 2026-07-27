@@ -1,0 +1,44 @@
+{
+  "name": "agroclimate-mcp-server",
+  "version": "1.0.0",
+  "description": "Servidor MCP para AgroClimate - Conecta ChatGPT con la API REST",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:http": "node dist/server.js",
+    "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/server.ts",
+    "clean": "rimraf dist",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "agroclimate",
+    "chatgpt",
+    "model-context-protocol"
+  ],
+  "author": "AgroClimate",
+  "license": "PRIVATE",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "winston": "^3.11.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.11.0",
+    "rimraf": "^5.0.5",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
