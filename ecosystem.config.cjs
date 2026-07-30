@@ -1,9 +1,9 @@
 module.exports = {
   apps: [
     {
-      name: "agroclimate-mcp",
+      name: "qualitycontrol-mcp",
       script: "dist/server.js",
-      cwd: "/opt/bitnami/apache2/htdocs/mcp/agroclimate",
+      cwd: "/opt/bitnami/apache2/htdocs/mcp/qualitycontrol",
       instances: 1,
       exec_mode: "fork",
       node_args: "--experimental-vm-modules",

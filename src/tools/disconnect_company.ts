@@ -5,11 +5,12 @@ import { revokeAllTokens } from "../auth/token-store.js";
 import type { ToolResult } from "../types/index.js";
 
 export const disconnectCompanyTool = {
-  name: "disconnect_company",
+  name: "qc_disconnect",
   description:
-    "Desconecta la empresa actual y cierra sesión completamente. " +
-    "Revoca tokens, limpia caché y fuerza re-autenticación. " +
-    "Usar cuando el usuario quiere cerrar sesión o cambiar de empresa.",
+    "Desconecta la empresa actual del sistema **QualityControl** y cierra la sesión completamente. " +
+    "Revoca tokens de QualityControl, limpia caché de QualityControl y fuerza re-autenticación. " +
+    "Usar únicamente cuando el usuario quiere cerrar sesión en QualityControl o cambiar de empresa en QualityControl. " +
+    "NO afecta otras aplicaciones como AgroClimate.",
   inputSchema: {
     type: "object" as const,
     properties: {},
@@ -24,7 +25,7 @@ export const disconnectCompanyTool = {
         content: [
           {
             type: "text",
-            text: "No hay ninguna empresa conectada actualmente.",
+            text: "No hay ninguna empresa conectada actualmente en QualityControl.",
           },
         ],
       };
@@ -39,7 +40,7 @@ export const disconnectCompanyTool = {
     cacheManager.invalidateSession(sessionId);
     logger.info(`Disconnect: Caché de sesión ${sessionId} invalidado`);
 
-    // 2. Revocar TODAS las sesiones (garantiza limpieza total)
+    // 2. Revocar TODAS las sesiones
     sessionManager.disconnectAll();
     logger.info("Disconnect: Todas las sesiones revocadas");
 
@@ -47,7 +48,7 @@ export const disconnectCompanyTool = {
     revokeAllTokens();
     logger.info("Disconnect: Todos los tokens revocados, re-auth flag activado");
 
-    // 4. Limpiar todo el caché global (por seguridad)
+    // 4. Limpiar todo el caché global
     cacheManager.clear();
     logger.info("Disconnect: Caché global limpiado");
 
@@ -58,13 +59,13 @@ export const disconnectCompanyTool = {
         {
           type: "text",
           text:
-            `✅ **Sesión cerrada completamente.**\n\n` +
-            (companyName ? `Empresa desconectada: ${companyName}\n\n` : "") +
+            `✅ **Sesión de QualityControl cerrada completamente.**\n\n` +
+            (companyName ? `Empresa desconectada de QualityControl: ${companyName}\n\n` : "") +
             `Se eliminaron:\n` +
-            `- Token de acceso\n` +
-            `- Sesión del servidor\n` +
-            `- Caché de datos\n\n` +
-            `Para iniciar sesión con otra empresa, dime "conectar" y se abrirá el formulario para ingresar la nueva API Key.`,
+            `- Token de acceso de QualityControl\n` +
+            `- Sesión del servidor QualityControl\n` +
+            `- Caché de datos de QualityControl\n\n` +
+            `Para iniciar sesión en QualityControl con otra empresa, dime "conectar en QualityControl" y se abrirá el formulario para ingresar la nueva API Key.`,
         },
       ],
     };

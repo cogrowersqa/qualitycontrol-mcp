@@ -1,21 +1,55 @@
 import { sessionManager } from "../sessions/manager.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
+import { config } from "../config/index.js";
 import type { ToolResult, Device } from "../types/index.js";
+
+type GenericDevice = Partial<Device> & Record<string, unknown>;
+type GenericRecord = Record<string, unknown>;
+
+const MAX_CHUNK_SIZE = 12000;
 
 export const getDevicesTool = {
   name: "get_devices",
   description:
-    "Obtiene el estado actual de dispositivos y sensores de la empresa conectada. " +
-    "Incluye análisis automático: resumen general, rankings (temperatura, humedad, horas frío, porciones frío), " +
-    "estado de conexión, extremos geográficos y detalle por dispositivo.",
+    "Obtiene datos completos desde la API de la empresa conectada. " +
+    "Devuelve todo el payload recibido (meta + data) y un resumen rápido.",
   inputSchema: {
     type: "object" as const,
-    properties: {},
+    properties: {
+      desde: {
+        type: "string",
+        description: "Fecha inicial opcional para filtrar (YYYY-MM-DD o YYYY-MM-DD HH:mm).",
+      },
+      hasta: {
+        type: "string",
+        description: "Fecha final opcional para filtrar (YYYY-MM-DD o YYYY-MM-DD HH:mm).",
+      },
+      limit: {
+        type: "number",
+        description: "Límite opcional de registros devueltos por la API.",
+      },
+      offset: {
+        type: "number",
+        description: "Offset opcional para paginar resultados.",
+      },
+      decode_json: {
+        type: "string",
+        description:
+          "Si es 'si', intenta decodificar campos de texto que contienen JSON (por ejemplo *_row). " +
+          "Por defecto: 'si'.",
+      },
+    },
     required: [],
   },
 
-  async handler(_params: Record<string, never>): Promise<ToolResult> {
+  async handler(params: {
+    desde?: string;
+    hasta?: string;
+    limit?: number;
+    offset?: number;
+    decode_json?: string;
+  }): Promise<ToolResult> {
     const session = sessionManager.getActiveSession();
     if (!session) {
       return {
@@ -37,16 +71,27 @@ export const getDevicesTool = {
       };
     }
 
+    const queryParams: Record<string, string> = {};
+    if (params.desde?.trim()) queryParams.desde = params.desde.trim();
+    if (params.hasta?.trim()) queryParams.hasta = params.hasta.trim();
+    if (typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit > 0) {
+      queryParams.limit = String(Math.floor(params.limit));
+    }
+    if (typeof params.offset === "number" && Number.isFinite(params.offset) && params.offset >= 0) {
+      queryParams.offset = String(Math.floor(params.offset));
+    }
+
     // Verificar caché
-    const cacheKey = cacheManager.buildKey(session.sessionId, "dispositivos");
-    const cached = cacheManager.get<Device[]>(cacheKey);
+    const cacheKey = cacheManager.buildKey(session.sessionId, "dispositivos", queryParams);
+    const cached = cacheManager.get<GenericRecord>(cacheKey);
     if (cached) {
-      return { content: [{ type: "text", text: formatDevices(cached) }] };
+      return { content: buildFullPayloadContent(cached) };
     }
 
     // Llamar a la API
-    const response = await apiClient.get<Device[]>({
-      endpoint: "api_clientes_dispositivos.php",
+    const response = await apiClient.get<GenericRecord | GenericDevice[]>({
+      endpoint: config.API_DEVICES_ENDPOINT,
+      params: queryParams,
       apiKey,
     });
 
@@ -57,135 +102,186 @@ export const getDevicesTool = {
       };
     }
 
-    // La API retorna dispositivos en campo "dispositivos"
-    const devices = (response.dispositivos as Device[]) ?? (response.data as Device[]) ?? [];
-    cacheManager.set(cacheKey, devices, 120); // Cache 2 minutos
+    const shouldDecodeJson = (params.decode_json ?? "si").trim().toLowerCase() === "si";
+    const normalizedPayload = normalizePayload(response as unknown, shouldDecodeJson);
+    cacheManager.set(cacheKey, normalizedPayload, 120); // Cache 2 minutos
 
-    return { content: [{ type: "text", text: formatDevices(devices) }] };
+    return { content: buildFullPayloadContent(normalizedPayload) };
   },
 };
 
-function formatDevices(devices: Device[]): string {
-  if (devices.length === 0) {
-    return "No se encontraron dispositivos registrados para tu empresa.";
+function normalizePayload(raw: unknown, decodeJsonFields: boolean): GenericRecord {
+  if (Array.isArray(raw)) {
+    const normalizedData = raw
+      .filter((item): item is GenericRecord => typeof item === "object" && item !== null)
+      .map((item) => (decodeJsonFields ? decodeEmbeddedJsonFields(item) : item));
+    return { data: normalizedData };
   }
 
-  // Extraer nombre de empresa del primer dispositivo
-  const empresa = devices[0]?.empresa ?? "Empresa";
-  const campos = Array.from(new Set(devices.map((d) => d.campo).filter((c): c is string => !!c))).sort();
-
-  const withTemp = devices.filter((d) => d.temperatura_actual !== null);
-  const withHum = devices.filter((d) => d.humedad_actual !== null);
-  const withCoords = devices.filter((d) => d.latitud !== null && d.longitud !== null);
-
-  const tempProm = withTemp.length > 0
-    ? withTemp.reduce((acc, d) => acc + (d.temperatura_actual ?? 0), 0) / withTemp.length
-    : null;
-  const humProm = withHum.length > 0
-    ? withHum.reduce((acc, d) => acc + (d.humedad_actual ?? 0), 0) / withHum.length
-    : null;
-
-  const masFrio = withTemp.length > 0
-    ? [...withTemp].sort((a, b) => (a.temperatura_actual ?? 0) - (b.temperatura_actual ?? 0))[0]
-    : null;
-  const masCaliente = withTemp.length > 0
-    ? [...withTemp].sort((a, b) => (b.temperatura_actual ?? 0) - (a.temperatura_actual ?? 0))[0]
-    : null;
-  const masHumedo = withHum.length > 0
-    ? [...withHum].sort((a, b) => (b.humedad_actual ?? 0) - (a.humedad_actual ?? 0))[0]
-    : null;
-  const masSeco = withHum.length > 0
-    ? [...withHum].sort((a, b) => (a.humedad_actual ?? 0) - (b.humedad_actual ?? 0))[0]
-    : null;
-
-  const topHorasFrio = [...devices].sort((a, b) => b.horas_frio_acumuladas - a.horas_frio_acumuladas)[0];
-  const topPorciones = [...devices].sort((a, b) => b.porciones_frio_acumuladas - a.porciones_frio_acumuladas)[0];
-
-  const withConnection = devices
-    .filter((d) => !!d.fecha_ultima_conexion)
-    .map((d) => ({
-      device: d,
-      date: new Date((d.fecha_ultima_conexion as string).replace(" ", "T")),
-    }))
-    .filter((x) => !Number.isNaN(x.date.getTime()));
-
-  const ultimoConectado = withConnection.length > 0
-    ? [...withConnection].sort((a, b) => b.date.getTime() - a.date.getTime())[0]
-    : null;
-  const masTiempoSinConexion = withConnection.length > 0
-    ? [...withConnection].sort((a, b) => a.date.getTime() - b.date.getTime())[0]
-    : null;
-
-  const now = Date.now();
-  const desconectados6h = withConnection.filter((x) => now - x.date.getTime() > 6 * 60 * 60 * 1000);
-
-  const masNorte = withCoords.length > 0
-    ? [...withCoords].sort((a, b) => (b.latitud ?? -Infinity) - (a.latitud ?? -Infinity))[0]
-    : null;
-  const masSur = withCoords.length > 0
-    ? [...withCoords].sort((a, b) => (a.latitud ?? Infinity) - (b.latitud ?? Infinity))[0]
-    : null;
-  const masEste = withCoords.length > 0
-    ? [...withCoords].sort((a, b) => (b.longitud ?? -Infinity) - (a.longitud ?? -Infinity))[0]
-    : null;
-  const masOeste = withCoords.length > 0
-    ? [...withCoords].sort((a, b) => (a.longitud ?? Infinity) - (b.longitud ?? Infinity))[0]
-    : null;
-
-  let text = `**Dispositivos de ${empresa} (${devices.length} total):**\n\n`;
-
-  text += `**Resumen general:**\n`;
-  text += `- Empresa: ${empresa}\n`;
-  text += `- Total dispositivos: ${devices.length}\n`;
-  text += `- Campos: ${campos.length > 0 ? campos.join(", ") : "N/A"}\n`;
-  if (tempProm !== null) text += `- Temperatura promedio actual: ${tempProm.toFixed(2)}°C\n`;
-  if (humProm !== null) text += `- Humedad promedio actual: ${humProm.toFixed(2)}%\n`;
-  text += `\n`;
-
-  text += `**Rankings actuales:**\n`;
-  if (masFrio) text += `- Más frío: ${masFrio.nombre_dispositivo} (${masFrio.temperatura_actual}°C)\n`;
-  if (masCaliente) text += `- Más caliente: ${masCaliente.nombre_dispositivo} (${masCaliente.temperatura_actual}°C)\n`;
-  if (masHumedo) text += `- Mayor humedad: ${masHumedo.nombre_dispositivo} (${masHumedo.humedad_actual}%)\n`;
-  if (masSeco) text += `- Menor humedad: ${masSeco.nombre_dispositivo} (${masSeco.humedad_actual}%)\n`;
-  if (topHorasFrio) text += `- Más horas frío: ${topHorasFrio.nombre_dispositivo} (${topHorasFrio.horas_frio_acumuladas})\n`;
-  if (topPorciones) text += `- Más porciones frío: ${topPorciones.nombre_dispositivo} (${topPorciones.porciones_frio_acumuladas.toFixed(2)})\n`;
-  text += `\n`;
-
-  text += `**Conectividad:**\n`;
-  if (ultimoConectado) {
-    text += `- Último conectado: ${ultimoConectado.device.nombre_dispositivo} (${ultimoConectado.device.fecha_ultima_conexion})\n`;
-  }
-  if (masTiempoSinConexion) {
-    text += `- Más tiempo sin conexión: ${masTiempoSinConexion.device.nombre_dispositivo} (${masTiempoSinConexion.device.fecha_ultima_conexion})\n`;
-  }
-  text += `- Sensores con más de 6h sin conexión: ${desconectados6h.length}\n\n`;
-
-  text += `**Extremos geográficos:**\n`;
-  if (masNorte) text += `- Más al norte: ${masNorte.nombre_dispositivo} (lat ${masNorte.latitud})\n`;
-  if (masSur) text += `- Más al sur: ${masSur.nombre_dispositivo} (lat ${masSur.latitud})\n`;
-  if (masEste) text += `- Más al este: ${masEste.nombre_dispositivo} (lon ${masEste.longitud})\n`;
-  if (masOeste) text += `- Más al oeste: ${masOeste.nombre_dispositivo} (lon ${masOeste.longitud})\n`;
-  text += `\n`;
-
-  text += `**Detalle por dispositivo:**\n`;
-
-  for (const device of devices) {
-    const campo = device.campo ? ` — Campo: ${device.campo}` : "";
-    const temp = device.temperatura_actual !== null ? `${device.temperatura_actual}°C` : "N/A";
-    const hum = device.humedad_actual !== null ? `${device.humedad_actual}%` : "N/A";
-    const hf = device.horas_frio_acumuladas ?? "N/A";
-    const fechaHf = device.fecha_horas_frio ?? "N/A";
-    const pf = device.porciones_frio_acumuladas !== undefined
-      ? Number(device.porciones_frio_acumuladas).toFixed(2)
-      : "N/A";
-    const lat = device.latitud ?? "N/A";
-    const lon = device.longitud ?? "N/A";
-    const conexion = device.fecha_ultima_conexion ?? "Sin conexión";
-
-    text += `- **${device.nombre_dispositivo}** (${device.codigo_dispositivo})${campo}\n`;
-    text += `  Temp: ${temp} | Hum: ${hum} | Horas frío: ${hf} (desde ${fechaHf}) | Porciones frío: ${pf}\n`;
-    text += `  Ubicación: lat ${lat}, lon ${lon} | Última conexión: ${conexion}\n`;
+  if (!raw || typeof raw !== "object") {
+    return { data: [] };
   }
 
-  return text;
+  const payload = raw as GenericRecord;
+  const cloned: GenericRecord = { ...payload };
+  const dataArray = extractDeviceArray(payload);
+  cloned.data = decodeJsonFields ? dataArray.map(decodeEmbeddedJsonFields) : dataArray;
+
+  return cloned;
+}
+
+function decodeEmbeddedJsonFields(device: GenericRecord): GenericRecord {
+  const output: GenericRecord = { ...device };
+
+  for (const [key, value] of Object.entries(output)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const trimmed = value.trim();
+    const looksLikeJson =
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"));
+
+    if (!looksLikeJson) {
+      continue;
+    }
+
+    try {
+      output[key] = JSON.parse(trimmed);
+    } catch {
+      // Mantener texto original si no se puede decodificar
+    }
+  }
+
+  return output;
+}
+
+function buildFullPayloadContent(payload: GenericRecord): Array<{ type: "text"; text: string }> {
+  const data = extractDeviceArray(payload);
+  const meta = extractMeta(payload);
+  const dataCount = data.length;
+  const total = toNullableNumber(meta.total) ?? toNullableNumber(payload.total) ?? dataCount;
+  const returned = toNullableNumber(meta.returned) ?? dataCount;
+  const empresa = extractCompanyName(payload, data) ?? "N/A";
+
+  const summaryLines = [
+    "**Datos completos de API recibidos**",
+    "",
+    `- Empresa: ${empresa}`,
+    `- Registros retornados: ${returned}`,
+    `- Total informado por API: ${total}`,
+  ];
+
+  if (meta.generado) {
+    summaryLines.push(`- Generado: ${String(meta.generado)}`);
+  }
+
+  if (meta.has_more !== undefined) {
+    summaryLines.push(`- has_more: ${String(meta.has_more)}`);
+  }
+
+  const summaryText = summaryLines.join("\n");
+  const fullJson = JSON.stringify(payload, null, 2);
+  const chunks = splitText(fullJson, MAX_CHUNK_SIZE);
+
+  const content: Array<{ type: "text"; text: string }> = [{ type: "text", text: summaryText }];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const title = `**Payload JSON completo (bloque ${i + 1}/${chunks.length})**`;
+    content.push({
+      type: "text",
+      text: `${title}\n\n\`\`\`json\n${chunks[i]}\n\`\`\``,
+    });
+  }
+
+  return content;
+}
+
+function splitText(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const end = Math.min(start + maxLength, text.length);
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
+function extractMeta(payload: GenericRecord): GenericRecord {
+  const meta = payload.meta;
+  if (meta && typeof meta === "object") {
+    return meta as GenericRecord;
+  }
+  return {};
+}
+
+function extractCompanyName(payload: GenericRecord, devices: GenericDevice[]): string | null {
+  const meta = extractMeta(payload);
+  const fromTop = firstString(payload.empresa, meta.empresa, payload.company, payload.company_name);
+  if (fromTop) {
+    return fromTop;
+  }
+
+  if (devices.length > 0 && typeof devices[0].empresa === "string" && devices[0].empresa.trim().length > 0) {
+    return devices[0].empresa.trim();
+  }
+
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function extractDeviceArray(response: Record<string, unknown>): GenericDevice[] {
+  const topLevelCandidates = [
+    response.dispositivos,
+    response.data,
+    response.items,
+    response.results,
+    response.records,
+  ];
+
+  for (const candidate of topLevelCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((item): item is GenericDevice => typeof item === "object" && item !== null);
+    }
+  }
+
+  const data = response.data;
+  if (data && typeof data === "object") {
+    const nested = data as Record<string, unknown>;
+    const nestedCandidates = [nested.dispositivos, nested.items, nested.results, nested.records];
+    for (const candidate of nestedCandidates) {
+      if (Array.isArray(candidate)) {
+        return candidate.filter((item): item is GenericDevice => typeof item === "object" && item !== null);
+      }
+    }
+  }
+
+  return [];
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
 }

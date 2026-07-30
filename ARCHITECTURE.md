@@ -1,8 +1,8 @@
-# AgroClimate MCP Server — Arquitectura Empresarial
+# QualityControl MCP Server — Arquitectura Empresarial
 
 ## Resumen Ejecutivo
 
-Servidor MCP (Model Context Protocol) que actúa como capa intermedia entre ChatGPT y la API REST de AgroClimate. Permite a los usuarios interactuar con la información de su empresa mediante lenguaje natural, sin acceso directo a bases de datos.
+Servidor MCP (Model Context Protocol) que actúa como capa intermedia entre ChatGPT y la API REST de QualityControl. Permite a los usuarios interactuar con la información de su empresa mediante lenguaje natural, sin acceso directo a bases de datos.
 
 ---
 

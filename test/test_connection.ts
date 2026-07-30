@@ -1,5 +1,5 @@
 /**
- * Script de prueba para el servidor MCP AgroClimate.
+ * Script de prueba para el servidor MCP QualityControl.
  * Simula las llamadas que haría ChatGPT/Claude al servidor.
  *
  * Uso:
@@ -26,7 +26,7 @@ async function separator(title: string) {
 }
 
 async function main() {
-  console.log("🚀 AgroClimate MCP Server — Test de Conexión\n");
+  console.log("🚀 QualityControl MCP Server — Test de Conexión\n");
   console.log(`API Base URL: ${config.API_BASE_URL}`);
   console.log(`Encryption Key: ${config.ENCRYPTION_KEY.substring(0, 8)}...`);
   console.log(`Session TTL: ${config.SESSION_TTL_HOURS}h`);

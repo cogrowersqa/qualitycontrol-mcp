@@ -1,5 +1,5 @@
 #!/bin/bash
-# ─── Deploy AgroClimate MCP Server ─────────────────────────────────
+# ─── Deploy QualityControl MCP Server ──────────────────────────────
 # Ejecutar en el servidor como root o con permisos adecuados
 #
 # Uso:
@@ -8,11 +8,11 @@
 
 set -e
 
-APP_DIR="/opt/bitnami/apache2/htdocs/mcp/agroclimate"
-APP_NAME="agroclimate-mcp"
+APP_DIR="/opt/bitnami/apache2/htdocs/mcp/qualitycontrol"
+APP_NAME="qualitycontrol-mcp"
 
 echo "═══════════════════════════════════════════════════"
-echo "  Deploying AgroClimate MCP Server"
+echo "  Deploying QualityControl MCP Server"
 echo "═══════════════════════════════════════════════════"
 
 # 1. Crear directorio si no existe
@@ -28,7 +28,7 @@ cd "$APP_DIR"
 if [ ! -f "package.json" ]; then
   echo "❌ Error: No se encontró package.json en $APP_DIR"
   echo "   Primero sube los archivos con:"
-  echo "   scp -r ./* mnavarrete@instance-qa:~/agroclimate-mcp/"
+  echo "   scp -r ./* mnavarrete@instance-qa:~/qualitycontrol-mcp/"
   exit 1
 fi
 
@@ -77,7 +77,7 @@ sleep 2
 if pm2 describe "$APP_NAME" | grep -q "online"; then
   echo ""
   echo "═══════════════════════════════════════════════════"
-  echo "  ✅ AgroClimate MCP Server desplegado!"
+  echo "  ✅ QualityControl MCP Server desplegado!"
   echo "═══════════════════════════════════════════════════"
   echo ""
   echo "  URL:    http://localhost:3100/mcp"

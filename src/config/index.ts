@@ -8,6 +8,10 @@ const envSchema = z.object({
   // API
   API_BASE_URL: z.string().url(),
   API_TIMEOUT_MS: z.coerce.number().default(30000),
+  API_VALIDATE_ENDPOINT: z.string().default("api_toda_info.php"),
+  API_DEVICES_ENDPOINT: z.string().default("api_toda_info.php"),
+  API_HISTORY_ENDPOINT: z.string().default("api_toda_info.php"),
+  API_WEATHER_ENDPOINT: z.string().default("api_toda_info.php"),
 
   // Cifrado
   ENCRYPTION_KEY: z.string().min(64).max(64),
@@ -28,7 +32,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("production"),
   MCP_PORT: z.coerce.number().default(3100),
   MCP_HOST: z.string().default("0.0.0.0"),
-  MCP_BASE_URL: z.string().default("https://qa.cogrowers.cl/mcp/agroclimate"),
+  MCP_BASE_URL: z.string().default("https://qa.cogrowers.cl/mcp/qualitycontrol"),
 });
 
 function loadConfig() {

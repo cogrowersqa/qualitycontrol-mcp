@@ -4,7 +4,7 @@ import { maskApiKey } from "../crypto/encryption.js";
 import type { ApiResponse, ApiRequestOptions } from "../types/index.js";
 
 /**
- * Cliente HTTP para comunicarse con la API REST de AgroClimate.
+ * Cliente HTTP para comunicarse con la API REST de QualityControl.
  * Todas las llamadas pasan por aquí para centralizar:
  * - Headers de autenticación
  * - Timeout
@@ -28,6 +28,8 @@ class ApiClient {
 
     // Construir URL con parámetros
     const url = new URL(`${this.baseUrl}/${endpoint.replace(/^\//, "")}`);
+    // La API requiere la key como query param ?apikey=
+    url.searchParams.set("apikey", apiKey);
     if (params) {
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") {
@@ -44,6 +46,7 @@ class ApiClient {
 
     try {
       logger.debug(`API Request: GET ${endpoint}`, {
+        url: url.toString(),
         params: params ?? {},
         apiKey: maskApiKey(apiKey),
       });
@@ -53,6 +56,7 @@ class ApiClient {
         headers: {
           "Authorization": `Bearer ${apiKey}`,
           "X-API-KEY": apiKey,
+          apikey: apiKey,
           "Content-Type": "application/json",
           Accept: "application/json",
         },
@@ -92,6 +96,11 @@ class ApiClient {
         data.success = data.ok;
       }
 
+      // Si la API respondió 200 pero no incluye "success"/"ok", es exitosa
+      if (data.success === undefined) {
+        data.success = true;
+      }
+
       return data;
     } catch (error: unknown) {
       clearTimeout(timeout);
@@ -120,7 +129,7 @@ class ApiClient {
    */
   async validateApiKey(apiKey: string): Promise<ApiResponse> {
     return this.get({
-      endpoint: "api_clientes_dispositivos.php",
+      endpoint: config.API_VALIDATE_ENDPOINT,
       apiKey,
     });
   }

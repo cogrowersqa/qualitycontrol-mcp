@@ -24,7 +24,7 @@ export const logger = createLogger({
     format.errors({ stack: true }),
     format.json()
   ),
-  defaultMeta: { service: "agroclimate-mcp" },
+  defaultMeta: { service: "qualitycontrol-mcp" },
   transports: [
     new transports.File({
       filename: `${config.LOG_DIR}/error.log`,

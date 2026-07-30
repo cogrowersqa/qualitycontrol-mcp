@@ -1,6 +1,7 @@
 import { sessionManager } from "../sessions/manager.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
+import { config } from "../config/index.js";
 import type { ToolResult, WeatherData } from "../types/index.js";
 
 export const getWeatherTool = {
@@ -48,7 +49,7 @@ export const getWeatherTool = {
     }
 
     const response = await apiClient.get<WeatherData>({
-      endpoint: "api_clientes_clima.php",
+      endpoint: config.API_WEATHER_ENDPOINT,
       params: queryParams,
       apiKey,
     });
@@ -60,7 +61,7 @@ export const getWeatherTool = {
       };
     }
 
-    const weather = response.data;
+    const weather = (response.data as WeatherData | undefined) ?? (response as unknown as WeatherData);
     if (weather) {
       cacheManager.set(cacheKey, weather, 600); // Cache 10 minutos (clima cambia lento)
     }
@@ -70,7 +71,7 @@ export const getWeatherTool = {
 };
 
 function formatWeather(data: WeatherData): string {
-  if (!data.temperatura && !data.humedad) {
+  if (data.temperatura === undefined && data.humedad === undefined) {
     return "No hay datos climáticos disponibles en este momento.";
   }
 

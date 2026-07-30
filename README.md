@@ -1,6 +1,6 @@
-# AgroClimate MCP Server
+# QualityControl MCP Server
 
-Servidor MCP (Model Context Protocol) que conecta ChatGPT/Claude con la API REST de AgroClimate, permitiendo a los usuarios consultar información de su empresa mediante lenguaje natural.
+Servidor MCP (Model Context Protocol) que conecta ChatGPT/Claude con la API REST de QualityControl, permitiendo a los usuarios consultar información de su empresa mediante lenguaje natural.
 
 ## Requisitos
 
@@ -41,11 +41,11 @@ npm run dev
 ```json
 {
   "mcpServers": {
-    "agroclimate": {
+    "qualitycontrol": {
       "command": "node",
-      "args": ["C:/Repositorio/MCP/AgroClimate/dist/index.js"],
+      "args": ["C:/Repositorio/MCP/QualityControl/dist/index.js"],
       "env": {
-        "API_BASE_URL": "https://api.agroclimate.cl",
+        "API_BASE_URL": "https://developers.cogrowers.cl/heladas",
         "ENCRYPTION_KEY": "<tu-key-64-hex>",
         "LOG_LEVEL": "info",
         "LOG_DIR": "./logs",
@@ -54,7 +54,11 @@ npm run dev
         "SESSION_CLEANUP_INTERVAL_MIN": "60",
         "CACHE_TTL_SECONDS": "300",
         "CACHE_MAX_ENTRIES": "1000",
-        "API_TIMEOUT_MS": "30000"
+        "API_TIMEOUT_MS": "30000",
+        "API_VALIDATE_ENDPOINT": "api_toda_info.php",
+        "API_DEVICES_ENDPOINT": "api_toda_info.php",
+        "API_HISTORY_ENDPOINT": "api_toda_info.php",
+        "API_WEATHER_ENDPOINT": "api_toda_info.php"
       }
     }
   }

@@ -1,9 +1,7 @@
+import { getInspectionsTool } from "./get_inspections.js";
+import { getQualitySummaryTool } from "./get_quality_summary.js";
 import { connectCompanyTool } from "./connect_company.js";
 import { disconnectCompanyTool } from "./disconnect_company.js";
-import { getDevicesTool } from "./get_devices.js";
-import { getSensorHistoryTool } from "./get_sensor_history.js";
-import { getWeatherTool } from "./get_weather.js";
-import { companyInfoTool } from "./company_info.js";
 import { healthcheckTool } from "./healthcheck.js";
 import type { ToolResult } from "../types/index.js";
 import { logger, auditLog } from "../logger/index.js";
@@ -30,10 +28,8 @@ export interface McpToolDefinition {
 export const tools: McpToolDefinition[] = [
   connectCompanyTool as unknown as McpToolDefinition,
   disconnectCompanyTool as unknown as McpToolDefinition,
-  getDevicesTool as unknown as McpToolDefinition,
-  getSensorHistoryTool as unknown as McpToolDefinition,
-  getWeatherTool as unknown as McpToolDefinition,
-  companyInfoTool as unknown as McpToolDefinition,
+  getInspectionsTool as unknown as McpToolDefinition,
+  getQualitySummaryTool as unknown as McpToolDefinition,
   healthcheckTool as unknown as McpToolDefinition,
 ];
 

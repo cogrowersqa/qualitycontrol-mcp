@@ -7,6 +7,11 @@ import type { Session } from "../types/index.js";
  * Manager de sesiones — lógica de alto nivel.
  */
 export class SessionManager {
+  /** Última conexión válida para reconexión silenciosa tras disconnect */
+  private lastApiKey: string | null = null;
+  private lastCompanyName: string | null = null;
+  private lastDeviceCount: number = 0;
+
   /**
    * Crea o recupera una sesión para una API Key.
    * Si ya existe una sesión activa con la misma key, la reutiliza.
@@ -18,6 +23,11 @@ export class SessionManager {
     role: string | null,
     deviceCount: number
   ): Session {
+    // Guardar para reconexión silenciosa posterior
+    this.lastApiKey = apiKey;
+    this.lastCompanyName = companyName;
+    this.lastDeviceCount = deviceCount;
+
     // Verificar si ya existe sesión activa para esta key
     const keyHash = hashApiKey(apiKey);
     const existing = sessionStore.findByApiKeyHash(keyHash);
@@ -30,6 +40,26 @@ export class SessionManager {
 
     // Crear nueva sesión
     return sessionStore.create(apiKey, companyName, userName, role, deviceCount);
+  }
+
+  /**
+   * Reconecta silenciosamente con la última empresa usada (si existe).
+   * Usado por los tools de datos tras un disconnect sin cambio de empresa.
+   */
+  reconnectLast(): Session | null {
+    if (!this.lastApiKey) return null;
+    logger.info(`Reconexión silenciosa: empresa "${this.lastCompanyName}"`);
+    return this.connectCompany(this.lastApiKey, this.lastCompanyName, null, null, this.lastDeviceCount);
+  }
+
+  /**
+   * Limpia también la última conexión guardada.
+   * Usar cuando se quiere forzar un cambio de empresa real.
+   */
+  clearLastConnection(): void {
+    this.lastApiKey = null;
+    this.lastCompanyName = null;
+    this.lastDeviceCount = 0;
   }
 
   /**

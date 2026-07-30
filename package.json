@@ -1,7 +1,7 @@
 {
-  "name": "agroclimate-mcp-server",
+  "name": "qualitycontrol-mcp-server",
   "version": "1.0.0",
-  "description": "Servidor MCP para AgroClimate - Conecta ChatGPT con la API REST",
+  "description": "Servidor MCP para QualityControl - Conecta ChatGPT con la API REST",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -16,11 +16,11 @@
   },
   "keywords": [
     "mcp",
-    "agroclimate",
+    "qualitycontrol",
     "chatgpt",
     "model-context-protocol"
   ],
-  "author": "AgroClimate",
+  "author": "QualityControl",
   "license": "PRIVATE",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

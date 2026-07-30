@@ -4,9 +4,9 @@ import { cacheManager } from "../cache/manager.js";
 import type { ToolResult } from "../types/index.js";
 
 export const healthcheckTool = {
-  name: "healthcheck",
+  name: "qc_healthcheck",
   description:
-    "Verifica el estado del servidor MCP, la conectividad con la API y las estadísticas de sesión y caché.",
+    "Verifica el estado del servidor **QualityControl** MCP, la conectividad con la API y las estadísticas de sesión y caché.",
   inputSchema: {
     type: "object" as const,
     properties: {},
@@ -18,7 +18,7 @@ export const healthcheckTool = {
     const sessionStats = sessionManager.getStats();
     const cacheStats = cacheManager.stats();
 
-    let text = "**Estado del Servidor MCP AgroClimate**\n\n";
+    let text = "**Estado del Servidor MCP QualityControl**\n\n";
 
     text += `- **MCP Server:** ✅ Activo\n`;
     text += `- **API REST:** ${apiReachable ? "✅ Conectada" : "❌ No alcanzable"}\n`;

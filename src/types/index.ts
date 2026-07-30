@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-// Tipos e interfaces del servidor MCP AgroClimate
+// Tipos e interfaces del servidor MCP QualityControl
 // ─────────────────────────────────────────────
 
 /** Estado de una sesión */

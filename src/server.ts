@@ -1,26 +1,28 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 
 /**
- * AgroClimate MCP Server — HTTP/SSE Transport
+ * QualityControl MCP Server â€” HTTP/SSE Transport
  *
- * Versión para deploy en servidor con PM2.
+ * VersiÃ³n para deploy en servidor con PM2.
  * Expone el MCP via Streamable HTTP en un puerto configurable.
  * Incluye OAuth 2.1 para compatibilidad con Claude.ai web.
  *
  * Endpoints:
- *   POST /mcp   — JSON-RPC messages (MCP protocol)
- *   GET  /mcp   — SSE stream (server → client notifications)
- *   DELETE /mcp — Close session
- *   GET  /health — Health check para PM2/balanceador
- *   GET  /.well-known/oauth-authorization-server — OAuth metadata
- *   GET  /authorize — OAuth authorization endpoint
- *   POST /token — OAuth token endpoint
- *   POST /register — OAuth dynamic client registration
+ *   POST /mcp   â€” JSON-RPC messages (MCP protocol)
+ *   GET  /mcp   â€” SSE stream (server â†’ client notifications)
+ *   DELETE /mcp â€” Close session
+ *   GET  /health â€” Health check para PM2/balanceador
+ *   GET  /.well-known/oauth-authorization-server â€” OAuth metadata
+ *   GET  /authorize â€” OAuth authorization endpoint
+ *   POST /token â€” OAuth token endpoint
+ *   POST /register â€” OAuth dynamic client registration
  */
 
 import express from "express";
 import cors from "cors";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -28,20 +30,28 @@ import { tools, executeTool } from "./tools/index.js";
 import { logger } from "./logger/index.js";
 import { apiClient } from "./api/client.js";
 import { sessionManager } from "./sessions/manager.js";
-import { isTokenRevoked, associateToken, clearRevoked, shouldForceReAuth, revokeAllTokens } from "./auth/token-store.js";
+import { isTokenRevoked, associateToken, clearRevoked, revokeAllTokens, getAuthVersion } from "./auth/token-store.js";
 import { cacheManager } from "./cache/manager.js";
 
-// ─── Config ────────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const PORT = parseInt(process.env.MCP_PORT || "3100", 10);
 const HOST = process.env.MCP_HOST || "0.0.0.0";
-const BASE_URL = process.env.MCP_BASE_URL || "https://qa.cogrowers.cl/mcp/agroclimate";
+const BASE_URL = process.env.MCP_BASE_URL || "https://qa.cogrowers.cl/mcp/qualitycontrol";
+const OAUTH_LOGO_URL = process.env.OAUTH_LOGO_URL || "https://web.cogrowers.cl/lovable-uploads/e945d53e-8ff3-45c8-b232-9e290210403c.png";
+const BASE_PATH = new URL(BASE_URL).pathname.replace(/\/+$/, "") || "/";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const ASSETS_DIR = join(__dirname, "../public/assets");
 
-// ─── Crear servidor MCP ────────────────────────────────────────────────────────
+// Favicon desde Google Drive
+const FAVICON_DATA_URL = "data:image/png;base64,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";
+
+// â”€â”€â”€ Crear servidor MCP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function createMcpServer(): McpServer {
   const server = new McpServer({
-    name: "agroclimate-mcp",
+    name: "qualitycontrol-mcp",
     version: "1.0.0",
   });
 
@@ -86,24 +96,29 @@ function createMcpServer(): McpServer {
   return server;
 }
 
-// ─── Express App ───────────────────────────────────────────────────────────────
+// â”€â”€â”€ Express App â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use("/assets", express.static(ASSETS_DIR));
+if (BASE_PATH !== "/") {
+  app.use(`${BASE_PATH}/assets`, express.static(ASSETS_DIR));
+}
 
-// Map de sesiones activas: sessionId → transport
+// Map de sesiones activas: sessionId â†’ transport
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
-// ─── OAuth 2.1 (requerido por Claude.ai web) ───────────────────────────────────
+// â”€â”€â”€ OAuth 2.1 (requerido por Claude.ai web) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// Almacenamiento temporal de códigos de autorización y tokens
+// Almacenamiento temporal de cÃ³digos de autorizaciÃ³n y tokens
 interface AuthCodeData {
   clientId: string;
   redirectUri: string;
   codeChallenge?: string;
+  codeChallengeMethod?: string;
   expiresAt: number;
   apiKey?: string;
   companyName?: string | null;
@@ -112,6 +127,7 @@ interface AuthCodeData {
 interface TokenData {
   clientId: string;
   expiresAt: number;
+  authVersion: number;
   apiKey?: string;
   companyName?: string | null;
   deviceCount?: number;
@@ -121,7 +137,9 @@ const accessTokens = new Map<string, TokenData>();
 const registeredClients = new Map<string, { clientId: string; clientSecret: string; redirectUris: string[] }>();
 
 // OAuth Server Metadata (RFC 8414)
-app.get("/.well-known/oauth-authorization-server", (_req, res) => {
+// Handles both the simple path (Apache strips BASE_PATH) and the
+// RFC 8414 path-aware URL that Apache rewrites to BASE_PATH/.well-known/...
+const oauthMetadataHandler = (_req: express.Request, res: express.Response): void => {
   res.json({
     issuer: BASE_URL,
     authorization_endpoint: `${BASE_URL}/authorize`,
@@ -133,37 +151,53 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
     token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
     scopes_supported: ["mcp"],
   });
-});
+};
+app.get("/.well-known/oauth-authorization-server", oauthMetadataHandler);
+if (BASE_PATH !== "/") {
+  app.get(`${BASE_PATH}/.well-known/oauth-authorization-server`, oauthMetadataHandler);
+}
 
 // Protected Resource Metadata (RFC 9728) — required by MCP spec
-app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+const protectedResourceHandler = (_req: express.Request, res: express.Response): void => {
   res.json({
     resource: `${BASE_URL}/mcp`,
     authorization_servers: [BASE_URL],
     bearer_methods_supported: ["header"],
     scopes_supported: ["mcp"],
   });
-});
+};
+app.get("/.well-known/oauth-protected-resource", protectedResourceHandler);
+if (BASE_PATH !== "/") {
+  app.get(`${BASE_PATH}/.well-known/oauth-protected-resource`, protectedResourceHandler);
+}
 
 // Dynamic Client Registration (RFC 7591)
 app.post("/register", (req, res) => {
   const clientId = `client_${randomUUID()}`;
   const clientSecret = `secret_${randomUUID()}`;
   const redirectUris = req.body.redirect_uris || [];
+  // Honor the requested auth method — Claude uses "none" (PKCE, no client_secret)
+  const requestedAuthMethod = req.body.token_endpoint_auth_method;
+  const authMethod = requestedAuthMethod === "none" ? "none" : "client_secret_post";
 
   registeredClients.set(clientId, { clientId, clientSecret, redirectUris });
-  logger.info(`OAuth: Cliente registrado: ${clientId}`);
+  logger.info(`OAuth: Cliente registrado: ${clientId} (auth_method=${authMethod})`);
 
-  res.status(201).json({
+  const responseBody: Record<string, unknown> = {
     client_id: clientId,
-    client_secret: clientSecret,
     client_id_issued_at: Math.floor(Date.now() / 1000),
     client_secret_expires_at: 0,
     redirect_uris: redirectUris,
     grant_types: ["authorization_code"],
     response_types: ["code"],
-    token_endpoint_auth_method: "client_secret_post",
-  });
+    token_endpoint_auth_method: authMethod,
+  };
+  // Only include client_secret when auth method is not "none"
+  if (authMethod !== "none") {
+    responseBody.client_secret = clientSecret;
+  }
+
+  res.status(201).json(responseBody);
 });
 
 // Escapar HTML para prevenir XSS
@@ -171,7 +205,69 @@ function escapeHtml(str: string): string {
   return (str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-// Authorization Endpoint — GET muestra formulario para ingresar API Key
+function normalizeValidationItems(validation: Record<string, unknown>): Record<string, unknown>[] {
+  const candidates = [
+    validation.dispositivos,
+    validation.data,
+    validation.items,
+    validation.results,
+    validation.records,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((row): row is Record<string, unknown> => typeof row === "object" && row !== null);
+    }
+  }
+
+  return [];
+}
+
+function extractCompanyName(
+  validation: Record<string, unknown>,
+  devices: Record<string, unknown>[]
+): string | null {
+  const topLevelNameKeys = ["empresa", "company", "company_name", "cliente", "client", "name"];
+  for (const key of topLevelNameKeys) {
+    const value = validation[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  const first = devices[0];
+  if (!first) return null;
+
+  const nestedNameKeys = ["empresa", "company", "company_name", "cliente", "client", "name"];
+  for (const key of nestedNameKeys) {
+    const value = first[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function extractDeviceCount(validation: Record<string, unknown>, devices: Record<string, unknown>[]): number {
+  const countKeys = ["total", "count", "total_dispositivos", "total_devices"];
+  for (const key of countKeys) {
+    const value = validation[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return devices.length;
+}
+
+// Authorization Endpoint â€” GET muestra formulario para ingresar API Key
 app.get("/authorize", (req, res) => {
   const { client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type } = req.query as Record<string, string>;
 
@@ -180,35 +276,37 @@ app.get("/authorize", (req, res) => {
     return;
   }
 
-  // Mostrar formulario de autenticación
+  // Mostrar formulario de autenticaciÃ³n
   res.type("html").send(`<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgroClimate</title>
-  <link rel="icon" type="image/png" href="https://cogrowers.cl/img/isotipo.png" />
-  <link rel="shortcut icon" href="https://cogrowers.cl/img/isotipo.png" />
+  <title>QualityControl</title>
+  <link rel="icon" type="image/png" href="${FAVICON_DATA_URL}" />
+  <link rel="shortcut icon" href="${FAVICON_DATA_URL}" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #eaf4ff 0%, #dff0ff 100%); display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-    .card { background: #fff; border-radius: 16px; box-shadow: 0 8px 32px rgba(26,26,107,0.12); padding: 44px 40px; max-width: 420px; width: 100%; text-align: center; border-top: 4px solid #1a1a6b; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #f7d8db 0%, #f2b9bf 48%, #ea9aa2 100%); display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 16px; box-shadow: 0 8px 32px rgba(130,22,22,0.16); padding: 44px 40px; max-width: 420px; width: 100%; text-align: center; border-top: 4px solid #b40000; }
     .logo { margin-bottom: 22px; }
-    .logo img { height: 72px; }
+    .logo img { display: block; width: 100%; max-width: 160px; margin: 0 auto; height: auto; }
     p { color: #555; font-size: 0.9rem; margin-bottom: 24px; line-height: 1.5; text-align: left; }
-    p strong { color: #1a1a6b; }
-    label { display: block; font-weight: 600; color: #1a1a6b; margin-bottom: 6px; font-size: 0.9rem; text-align: left; }
+    p strong { color: #7b0000; }
+    label { display: block; font-weight: 600; color: #7b0000; margin-bottom: 6px; font-size: 0.9rem; text-align: left; }
     input[type=password] { width: 100%; padding: 14px; border: 2px solid #d0d5e0; border-radius: 8px; font-size: 1rem; margin-bottom: 20px; transition: border-color 0.2s, box-shadow 0.2s; }
-    input[type=password]:focus { outline: none; border-color: #1a1a6b; box-shadow: 0 0 0 3px rgba(26,26,107,0.1); }
-    button { width: 100%; padding: 14px; background: #1a1a6b; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
-    button:hover { background: #12124a; }
+    input[type=password]:focus { outline: none; border-color: #b40000; box-shadow: 0 0 0 3px rgba(180,0,0,0.12); }
+    button { width: 100%; padding: 14px; background: #b40000; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #8f0000; }
     .info { font-size: 0.8rem; color: #999; margin-top: 8px; text-align: center; }
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="logo"><img src="https://cogrowers.cl/img/logo.png" alt="COGROWERS" /></div>
-    <p>Ingresa tu API Key para conectar tu empresa.<br>La puedes obtener desde <strong>cogrowers.cl</strong> en la sección <strong>API</strong>.</p>
+    <div class="logo">
+      <img src="${escapeHtml(OAUTH_LOGO_URL)}" alt="COGROWERS Calidad" />
+    </div>
+    <p>Ingresa tu API Key para conectar tu empresa.<br>La puedes obtener desde <strong>cogrowers.cl</strong> en la secci&oacute;n <strong>API</strong>.</p>
     <form method="POST" action="${escapeHtml(BASE_URL)}/authorize">
       <input type="hidden" name="client_id" value="${escapeHtml(client_id)}" />
       <input type="hidden" name="redirect_uri" value="${escapeHtml(redirect_uri)}" />
@@ -226,39 +324,41 @@ app.get("/authorize", (req, res) => {
 </html>`);
 });
 
-// Authorization Endpoint — POST procesa el formulario
+// Authorization Endpoint â€” POST procesa el formulario
 app.post("/authorize", async (req, res) => {
-  const { client_id, redirect_uri, state, code_challenge, response_type, api_key } = req.body;
+  const { client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type, api_key } = req.body;
 
   if (response_type !== "code" || !api_key) {
     res.status(400).json({ error: "invalid_request" });
     return;
   }
 
-  // Validar API Key contra la API de AgroClimate
+  // Validar API Key contra la API configurada
   try {
     const validation = await apiClient.validateApiKey(api_key.trim());
 
     if (!validation.success) {
-      logger.warn(`OAuth: API Key inválida desde ${client_id}`);
+      logger.warn(`OAuth: API Key invÃ¡lida desde ${client_id}`);
       res.type("html").send(`<!DOCTYPE html>
 <html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Error</title>
 <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f0f4f0}.card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.1);padding:40px;max-width:420px;text-align:center}h1{color:#991b1b;margin-bottom:12px}p{color:#666;margin-bottom:20px}a{color:#1a5d1a;font-weight:600}</style>
-</head><body><div class="card"><h1>API Key inválida</h1><p>La API Key ingresada no es válida o no tiene permisos. Verifica que la copiaste correctamente.</p><a href="javascript:history.back()">← Volver a intentar</a></div></body></html>`);
+</head><body><div class="card"><h1>API Key invÃ¡lida</h1><p>La API Key ingresada no es vÃ¡lida o no tiene permisos. Verifica que la copiaste correctamente.</p><a href="javascript:history.back()">â† Volver a intentar</a></div></body></html>`);
       return;
     }
 
-    // API Key válida — extraer info de empresa (viene dentro de cada dispositivo)
-    const devices = (validation.dispositivos as Array<{ empresa?: string }>) ?? (validation.data as unknown[]) ?? [];
-    const companyName = (Array.isArray(devices) && devices.length > 0 && devices[0].empresa) ? devices[0].empresa : null;
-    const deviceCount = (validation.total as number) ?? devices.length;
+    // API Key vÃ¡lida â€” extraer info de empresa compatible con mÃºltiples formatos
+    const normalized = validation as Record<string, unknown>;
+    const devices = normalizeValidationItems(normalized);
+    const companyName = extractCompanyName(normalized, devices);
+    const deviceCount = extractDeviceCount(normalized, devices);
 
-    // Generar código de autorización con API Key incluida
+    // Generar cÃ³digo de autorizaciÃ³n con API Key incluida
     const code = randomUUID();
     authCodes.set(code, {
       clientId: client_id,
       redirectUri: redirect_uri,
       codeChallenge: code_challenge,
+      codeChallengeMethod: code_challenge_method,
       expiresAt: Date.now() + 5 * 60 * 1000,
       apiKey: api_key.trim(),
       companyName,
@@ -279,7 +379,7 @@ app.post("/authorize", async (req, res) => {
 
 // Token Endpoint
 app.post("/token", (req, res) => {
-  const { grant_type, code, client_id } = req.body;
+  const { grant_type, code, client_id, code_verifier } = req.body;
 
   if (grant_type !== "authorization_code") {
     res.status(400).json({ error: "unsupported_grant_type" });
@@ -293,6 +393,26 @@ app.post("/token", (req, res) => {
     return;
   }
 
+  // Validate PKCE (RFC 7636) if code_challenge was stored
+  if (authCode.codeChallenge) {
+    if (!code_verifier) {
+      res.status(400).json({ error: "invalid_grant", error_description: "code_verifier required" });
+      return;
+    }
+    const method = authCode.codeChallengeMethod || "S256";
+    let computedChallenge: string;
+    if (method === "S256") {
+      computedChallenge = createHash("sha256").update(code_verifier).digest("base64url");
+    } else {
+      computedChallenge = code_verifier;
+    }
+    if (computedChallenge !== authCode.codeChallenge) {
+      authCodes.delete(code);
+      res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
+      return;
+    }
+  }
+
   // Eliminar código usado (single-use)
   authCodes.delete(code);
 
@@ -301,6 +421,7 @@ app.post("/token", (req, res) => {
   accessTokens.set(token, {
     clientId: client_id || authCode.clientId,
     expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 horas
+    authVersion: getAuthVersion(),
     apiKey: authCode.apiKey,
     companyName: authCode.companyName,
     deviceCount: authCode.deviceCount,
@@ -316,7 +437,7 @@ app.post("/token", (req, res) => {
   });
 });
 
-// ─── MCP Endpoint ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ MCP Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Middleware: verificar Bearer token en /mcp
 function validateBearerToken(req: express.Request, res: express.Response): boolean {
@@ -333,10 +454,10 @@ function validateBearerToken(req: express.Request, res: express.Response): boole
   const token = authHeader.slice(7);
   const tokenData = accessTokens.get(token);
   const isRevoked = isTokenRevoked(token);
-  const forceReAuth = shouldForceReAuth();
+  const staleAuthVersion = tokenData ? tokenData.authVersion !== getAuthVersion() : false;
 
-  if (!tokenData || tokenData.expiresAt < Date.now() || isRevoked || forceReAuth) {
-    logger.info(`validateBearerToken: Token rechazado [exists=${!!tokenData}, expired=${tokenData ? tokenData.expiresAt < Date.now() : 'N/A'}, revoked=${isRevoked}, forceReAuth=${forceReAuth}]`);
+  if (!tokenData || tokenData.expiresAt < Date.now() || isRevoked || staleAuthVersion) {
+    logger.info(`validateBearerToken: Token rechazado [exists=${!!tokenData}, expired=${tokenData ? tokenData.expiresAt < Date.now() : 'N/A'}, revoked=${isRevoked}, staleAuthVersion=${staleAuthVersion}]`);
     accessTokens.delete(token);
     clearRevoked(token);
     const resourceMetadataUrl = `${BASE_URL}/.well-known/oauth-protected-resource`;
@@ -346,7 +467,7 @@ function validateBearerToken(req: express.Request, res: express.Response): boole
     return false;
   }
 
-  // Log de contexto: qué empresa está usando este token
+  // Log de contexto: quÃ© empresa estÃ¡ usando este token
   const activeSession = sessionManager.getActiveSession();
   logger.debug(`validateBearerToken: OK [token_company=${tokenData.companyName}, active_session=${activeSession?.companyName ?? 'ninguna'}, session_id=${activeSession?.sessionId ?? 'N/A'}]`);
 
@@ -355,26 +476,26 @@ function validateBearerToken(req: express.Request, res: express.Response): boole
 
 app.all("/mcp", async (req, res) => {
   try {
-    // Verificar autenticación
+    // Verificar autenticaciÃ³n
     if (!validateBearerToken(req, res)) return;
 
-    // Verificar si es una sesión existente
+    // Verificar si es una sesiÃ³n existente
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
     if (sessionId && transports.has(sessionId)) {
-      // Sesión existente: reutilizar transport
+      // SesiÃ³n existente: reutilizar transport
       const transport = transports.get(sessionId)!;
       await transport.handleRequest(req, res, req.body);
       return;
     }
 
-    // Para GET/DELETE sin sesión válida, rechazar
+    // Para GET/DELETE sin sesiÃ³n vÃ¡lida, rechazar
     if (req.method === "GET" || req.method === "DELETE") {
       res.status(404).json({ error: "Session not found" });
       return;
     }
 
-    // Nueva sesión (POST con initialize): crear transport + servidor MCP
+    // Nueva sesiÃ³n (POST con initialize): crear transport + servidor MCP
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
     });
@@ -385,10 +506,10 @@ app.all("/mcp", async (req, res) => {
     // handleRequest procesa el initialize y GENERA el sessionId
     await transport.handleRequest(req, res, req.body);
 
-    // Guardar DESPUÉS de handleRequest (ahora sí tiene sessionId)
+    // Guardar DESPUÃ‰S de handleRequest (ahora sÃ­ tiene sessionId)
     if (transport.sessionId) {
       transports.set(transport.sessionId, transport);
-      logger.info(`Nueva sesión MCP: ${transport.sessionId}`);
+      logger.info(`Nueva sesiÃ³n MCP: ${transport.sessionId}`);
     }
 
     // Auto-conectar empresa si el token tiene API Key (del formulario OAuth)
@@ -397,13 +518,13 @@ app.all("/mcp", async (req, res) => {
       const tokenData = accessTokens.get(bearerToken);
       if (tokenData?.apiKey) {
         try {
-          // Si hay sesión activa de OTRA empresa, revocarla primero
+          // Si hay sesiÃ³n activa de OTRA empresa, revocarla primero
           const existingSession = sessionManager.getActiveSession();
           if (existingSession) {
             const existingApiKey = sessionManager.getApiKey(existingSession.sessionId);
             if (existingApiKey && existingApiKey !== tokenData.apiKey) {
               // Empresa diferente: limpiar todo antes de conectar la nueva
-              logger.info(`Cambio de empresa detectado: revocando sesión anterior (${existingSession.companyName})`);
+              logger.info(`Cambio de empresa detectado: revocando sesiÃ³n anterior (${existingSession.companyName})`);
               sessionManager.disconnectAll();
             }
           }
@@ -419,7 +540,7 @@ app.all("/mcp", async (req, res) => {
             );
           }
 
-          // Asociar token con la sesión para poder revocarlo desde disconnect
+          // Asociar token con la sesiÃ³n para poder revocarlo desde disconnect
           const activeSession = sessionManager.getActiveSession();
           if (activeSession) {
             associateToken(activeSession.sessionId, bearerToken);
@@ -435,7 +556,7 @@ app.all("/mcp", async (req, res) => {
       const sid = transport.sessionId;
       if (sid) {
         transports.delete(sid);
-        logger.info(`Sesión MCP cerrada: ${sid}`);
+        logger.info(`SesiÃ³n MCP cerrada: ${sid}`);
       }
     };
   } catch (error) {
@@ -448,12 +569,12 @@ app.all("/mcp", async (req, res) => {
   }
 });
 
-// ─── Logout Endpoint ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Logout Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
- * POST /logout — Cierre de sesión completo.
- * Revoca tokens, elimina sesiones, limpia caché.
- * Garantiza que la próxima conexión requiera nueva API Key.
+ * POST /logout â€” Cierre de sesiÃ³n completo.
+ * Revoca tokens, elimina sesiones, limpia cachÃ©.
+ * Garantiza que la prÃ³xima conexiÃ³n requiera nueva API Key.
  */
 app.post("/logout", (req, res) => {
   const bearerToken = req.headers.authorization?.slice(7);
@@ -462,7 +583,7 @@ app.post("/logout", (req, res) => {
 
   // 1. Revocar todas las sesiones internas
   const revokedSessions = sessionManager.disconnectAll();
-  logger.info(`Logout: ${revokedSessions} sesión(es) revocadas`);
+  logger.info(`Logout: ${revokedSessions} sesiÃ³n(es) revocadas`);
 
   // 2. Revocar todos los tokens OAuth
   revokeAllTokens();
@@ -473,11 +594,11 @@ app.post("/logout", (req, res) => {
     logger.info(`Logout: Token eliminado de accessTokens`);
   }
 
-  // 4. Limpiar TODO el caché
+  // 4. Limpiar TODO el cachÃ©
   cacheManager.clear();
-  logger.info("Logout: Caché limpiado completamente");
+  logger.info("Logout: CachÃ© limpiado completamente");
 
-  // 5. Respuesta con headers anti-caché
+  // 5. Respuesta con headers anti-cachÃ©
   res.set({
     "Clear-Site-Data": '"cache", "cookies", "storage"',
     "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -486,7 +607,7 @@ app.post("/logout", (req, res) => {
 
   res.json({
     logout_success: true,
-    message: "Sesión cerrada completamente. Debe autenticarse nuevamente.",
+    message: "SesiÃ³n cerrada completamente. Debe autenticarse nuevamente.",
     cleared: {
       sessions: revokedSessions,
       tokens: true,
@@ -497,12 +618,12 @@ app.post("/logout", (req, res) => {
   logger.info("=== LOGOUT COMPLETADO ===");
 });
 
-// ─── Health check ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
-    service: "agroclimate-mcp",
+    service: "qualitycontrol-mcp",
     version: "1.0.0",
     transport: "streamable-http",
     activeSessions: transports.size,
@@ -511,16 +632,16 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// ─── Iniciar servidor HTTP ─────────────────────────────────────────────────────
+// â”€â”€â”€ Iniciar servidor HTTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.listen(PORT, HOST, () => {
-  logger.info(`AgroClimate MCP Server v1.0.0 (HTTP) escuchando en http://${HOST}:${PORT}`);
+  logger.info(`QualityControl MCP Server v1.0.0 (HTTP) escuchando en http://${HOST}:${PORT}`);
   logger.info(`MCP endpoint: POST http://${HOST}:${PORT}/mcp`);
   logger.info(`Health check: GET http://${HOST}:${PORT}/health`);
   logger.info(`Tools registrados: ${tools.length}`);
 });
 
-// ─── Graceful shutdown ─────────────────────────────────────────────────────────
+// â”€â”€â”€ Graceful shutdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Recibido ${signal}, cerrando servidor...`);
@@ -529,7 +650,7 @@ async function shutdown(signal: string): Promise<void> {
   for (const [sid, transport] of transports) {
     try {
       await transport.close();
-      logger.debug(`Sesión ${sid} cerrada`);
+      logger.debug(`SesiÃ³n ${sid} cerrada`);
     } catch {
       // ignore
     }
@@ -543,7 +664,7 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 process.on("uncaughtException", (error) => {
-  logger.error("Excepción no capturada", { error: error.message, stack: error.stack });
+  logger.error("ExcepciÃ³n no capturada", { error: error.message, stack: error.stack });
   process.exit(1);
 });
 

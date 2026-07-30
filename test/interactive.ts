@@ -1,5 +1,5 @@
 /**
- * Test interactivo del MCP AgroClimate.
+ * Test interactivo del MCP QualityControl.
  * Uso: npx tsx test/interactive.ts
  *
  * 1. Pega tu API Key
@@ -33,7 +33,7 @@ function printResult(result: { content: Array<{ type: string; text: string }>; i
 
 async function main() {
   console.log("╔══════════════════════════════════════════════════╗");
-  console.log("║   AgroClimate MCP — Test Interactivo            ║");
+  console.log("║   QualityControl MCP — Test Interactivo         ║");
   console.log("╚══════════════════════════════════════════════════╝\n");
 
   // Paso 1: Pedir API Key

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * AgroClimate MCP Server
+ * QualityControl MCP Server
  *
- * Servidor Model Context Protocol que conecta ChatGPT/Claude con la API REST de AgroClimate.
+ * Servidor Model Context Protocol que conecta ChatGPT/Claude con la API REST de QualityControl.
  * Transporte: stdio (estándar MCP)
  *
  * Flujo:
@@ -22,7 +22,7 @@ import { logger } from "./logger/index.js";
 // ─── Crear servidor MCP ────────────────────────────────────────────────────────
 
 const server = new McpServer({
-  name: "agroclimate-mcp",
+  name: "qualitycontrol-mcp",
   version: "1.0.0",
 });
 
@@ -70,7 +70,7 @@ for (const tool of tools) {
 // ─── Iniciar servidor ──────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Iniciando AgroClimate MCP Server v1.0.0");
+  logger.info("Iniciando QualityControl MCP Server v1.0.0");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

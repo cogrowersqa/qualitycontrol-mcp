@@ -17,8 +17,11 @@ const tokenSessionMap = new Map<string, string>();
 /** Tokens revocados (pendientes de ser rechazados en la próxima request) */
 const revokedTokens = new Set<string>();
 
-/** Flag global: forzar re-autenticación en la próxima request */
-let forceReAuthFlag = false;
+/**
+ * Versión global de autenticación.
+ * Se incrementa al cerrar sesión/cambiar empresa para invalidar tokens emitidos antes.
+ */
+let authVersion = 0;
 
 /**
  * Asocia un token OAuth con una sesión MCP (bidireccional).
@@ -71,7 +74,8 @@ export function revokeAllTokens(): void {
   }
   sessionTokenMap.clear();
   tokenSessionMap.clear();
-  forceReAuthFlag = true;
+  authVersion += 1;
+  logger.debug(`Versión de autenticación incrementada a ${authVersion}`);
 }
 
 /**
@@ -93,18 +97,14 @@ export function clearRevoked(token: string): void {
  * Usado por disconnect_company y connect_company (sin API key).
  */
 export function requestReAuth(): void {
-  forceReAuthFlag = true;
-  logger.debug("Re-autenticación solicitada (flag activado)");
+  authVersion += 1;
+  logger.debug(`Re-autenticación solicitada (version=${authVersion})`);
 }
 
 /**
- * Verifica y consume el flag de re-auth.
- * Retorna true UNA vez si se solicitó re-auth.
+ * Retorna la versión global actual de autenticación.
+ * Los tokens emitidos con una versión distinta deben rechazarse.
  */
-export function shouldForceReAuth(): boolean {
-  if (forceReAuthFlag) {
-    forceReAuthFlag = false;
-    return true;
-  }
-  return false;
+export function getAuthVersion(): number {
+  return authVersion;
 }
