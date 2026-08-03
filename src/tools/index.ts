@@ -1,4 +1,5 @@
 import { getInspectionsTool } from "./get_inspections.js";
+import { getInspectionByIdTool } from "./get_inspection_by_id.js";
 import { getQualitySummaryTool } from "./get_quality_summary.js";
 import { connectCompanyTool } from "./connect_company.js";
 import { disconnectCompanyTool } from "./disconnect_company.js";
@@ -29,6 +30,7 @@ export const tools: McpToolDefinition[] = [
   connectCompanyTool as unknown as McpToolDefinition,
   disconnectCompanyTool as unknown as McpToolDefinition,
   getInspectionsTool as unknown as McpToolDefinition,
+  getInspectionByIdTool as unknown as McpToolDefinition,
   getQualitySummaryTool as unknown as McpToolDefinition,
   healthcheckTool as unknown as McpToolDefinition,
 ];
