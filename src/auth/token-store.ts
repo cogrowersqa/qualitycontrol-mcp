@@ -108,3 +108,12 @@ export function requestReAuth(): void {
 export function getAuthVersion(): number {
   return authVersion;
 }
+
+/**
+ * Restaura la versión de autenticación desde persistencia en disco.
+ * Se llama al iniciar el servidor para que los tokens guardados sigan siendo válidos.
+ */
+export function restoreAuthVersion(version: number): void {
+  authVersion = version;
+  logger.debug(`Auth version restaurada a ${authVersion}`);
+}

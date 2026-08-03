@@ -16,7 +16,7 @@ export interface Session {
   deviceCount: number;
   createdAt: string;
   lastAccess: string;
-  expiresAt: string;
+  expiresAt: string | null;  // null = nunca expira
   status: SessionStatus;
 }
 

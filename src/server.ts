@@ -21,7 +21,8 @@
 import express from "express";
 import cors from "cors";
 import { randomUUID, createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -30,7 +31,7 @@ import { tools, executeTool } from "./tools/index.js";
 import { logger } from "./logger/index.js";
 import { apiClient } from "./api/client.js";
 import { sessionManager } from "./sessions/manager.js";
-import { isTokenRevoked, associateToken, clearRevoked, revokeAllTokens, getAuthVersion } from "./auth/token-store.js";
+import { isTokenRevoked, associateToken, clearRevoked, revokeAllTokens, getAuthVersion, restoreAuthVersion } from "./auth/token-store.js";
 import { cacheManager } from "./cache/manager.js";
 
 // â”€â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -135,6 +136,52 @@ interface TokenData {
 const authCodes = new Map<string, AuthCodeData>();
 const accessTokens = new Map<string, TokenData>();
 const registeredClients = new Map<string, { clientId: string; clientSecret: string; redirectUris: string[] }>();
+
+// ─── Persistencia de tokens OAuth ────────────────────────────────────────────
+const TOKEN_STORE_FILE = resolve(process.env.MCP_TOKEN_STORE_FILE || "./data/tokens.json");
+
+function saveTokens(): void {
+  try {
+    const dir = dirname(TOKEN_STORE_FILE);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const payload = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      authVersion: getAuthVersion(),
+      tokens: Array.from(accessTokens.entries()).map(([token, data]) => ({ token, ...data })),
+    };
+    writeFileSync(TOKEN_STORE_FILE, JSON.stringify(payload, null, 2), "utf8");
+  } catch (err) {
+    logger.error("TokenStore: error guardando en disco", { error: String(err) });
+  }
+}
+
+function loadPersistedTokens(): void {
+  try {
+    if (!existsSync(TOKEN_STORE_FILE)) { logger.debug("TokenStore: no existe archivo, comenzando vacio"); return; }
+    const raw = readFileSync(TOKEN_STORE_FILE, "utf8");
+    const payload = JSON.parse(raw) as { version: number; authVersion?: number; tokens: Array<{ token: string } & TokenData> };
+    if (payload.version !== 1 || !Array.isArray(payload.tokens)) { logger.warn("TokenStore: formato no reconocido, ignorando"); return; }
+    // Restaurar authVersion para que los tokens cargados no queden como obsoletos
+    if (typeof payload.authVersion === "number") {
+      restoreAuthVersion(payload.authVersion);
+    }
+    let loaded = 0;
+    for (const entry of payload.tokens) {
+      const { token, ...data } = entry;
+      if (token && data.clientId) {
+        accessTokens.set(token, data);
+        loaded++;
+      }
+    }
+    if (loaded > 0) logger.info(`TokenStore: ${loaded} token(s) restaurado(s) desde disco`);
+  } catch (err) {
+    logger.warn("TokenStore: error cargando desde disco, comenzando vacio", { error: String(err) });
+  }
+}
+
+// Cargar tokens persistidos al iniciar
+loadPersistedTokens();
 
 // OAuth Server Metadata (RFC 8414)
 // Handles both the simple path (Apache strips BASE_PATH) and the
@@ -420,19 +467,22 @@ app.post("/token", (req, res) => {
   const token = `mcp_${randomUUID()}`;
   accessTokens.set(token, {
     clientId: client_id || authCode.clientId,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 horas
+    expiresAt: Date.now() + 10 * 365 * 24 * 60 * 60 * 1000, // 10 años — sin vencimiento práctico
     authVersion: getAuthVersion(),
     apiKey: authCode.apiKey,
     companyName: authCode.companyName,
     deviceCount: authCode.deviceCount,
   });
 
+  // Persistir token en disco para que sobreviva reinicios del servidor
+  saveTokens();
+
   logger.info(`OAuth: Token emitido para ${client_id || authCode.clientId}`);
 
   res.json({
     access_token: token,
     token_type: "Bearer",
-    expires_in: 86400,
+    expires_in: 315360000, // 10 años en segundos
     scope: "mcp",
   });
 });
@@ -460,6 +510,7 @@ function validateBearerToken(req: express.Request, res: express.Response): boole
     logger.info(`validateBearerToken: Token rechazado [exists=${!!tokenData}, expired=${tokenData ? tokenData.expiresAt < Date.now() : 'N/A'}, revoked=${isRevoked}, staleAuthVersion=${staleAuthVersion}]`);
     accessTokens.delete(token);
     clearRevoked(token);
+    saveTokens();
     const resourceMetadataUrl = `${BASE_URL}/.well-known/oauth-protected-resource`;
     res.status(401)
       .set("WWW-Authenticate", `Bearer error="invalid_token", resource_metadata="${resourceMetadataUrl}"`)
@@ -593,6 +644,9 @@ app.post("/logout", (req, res) => {
     accessTokens.delete(bearerToken);
     logger.info(`Logout: Token eliminado de accessTokens`);
   }
+
+  // Persistir el estado actualizado (sin los tokens revocados)
+  saveTokens();
 
   // 4. Limpiar TODO el cachÃ©
   cacheManager.clear();

@@ -33,6 +33,9 @@ const envSchema = z.object({
   MCP_PORT: z.coerce.number().default(3100),
   MCP_HOST: z.string().default("0.0.0.0"),
   MCP_BASE_URL: z.string().default("https://qa.cogrowers.cl/mcp/qualitycontrol"),
+  // Persistencia en disco
+  MCP_SESSION_STORE_FILE: z.string().default("./data/sessions.json"),
+  MCP_TOKEN_STORE_FILE: z.string().default("./data/tokens.json"),
 });
 
 function loadConfig() {

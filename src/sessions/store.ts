@@ -1,238 +1,149 @@
-import { randomUUID } from "node:crypto";
+﻿import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import type { Session } from "../types/index.js";
 import { encrypt, decrypt, hashApiKey } from "../crypto/encryption.js";
 import { config } from "../config/index.js";
 import { logger } from "../logger/index.js";
 
-/**
- * Almacén de sesiones en memoria.
- * Las sesiones se mantienen mientras el proceso MCP esté activo.
- */
 class SessionStore {
   private sessions: Map<string, Session> = new Map();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly storeFile: string;
 
   constructor() {
+    this.storeFile = resolve(config.MCP_SESSION_STORE_FILE);
+    this.loadFromFile();
     this.startCleanup();
   }
 
-  /**
-   * Crea una nueva sesión con la API Key cifrada.
-   */
-  create(
-    apiKey: string,
-    companyName: string | null,
-    userName: string | null,
-    role: string | null,
-    deviceCount: number
-  ): Session {
+  create(apiKey: string, companyName: string | null, userName: string | null, role: string | null, deviceCount: number): Session {
     const sessionId = randomUUID();
-    const now = new Date();
-    const expiresAt = new Date(
-      now.getTime() + config.SESSION_TTL_HOURS * 60 * 60 * 1000
-    );
-
+    const now = new Date().toISOString();
     const session: Session = {
       sessionId,
       apiKeyEncrypted: encrypt(apiKey),
       apiKeyHash: hashApiKey(apiKey),
-      companyName,
-      userName,
-      role,
-      deviceCount,
-      createdAt: now.toISOString(),
-      lastAccess: now.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      companyName, userName, role, deviceCount,
+      createdAt: now, lastAccess: now,
+      expiresAt: null,
       status: "active",
     };
-
     this.sessions.set(sessionId, session);
-    logger.info(`Sesión creada: ${sessionId} (empresa: ${companyName ?? "desconocida"})`);
-
+    logger.info(`Sesion creada: ${sessionId} (empresa: ${companyName ?? "desconocida"})`);
+    this.saveToFile();
     return session;
   }
 
-  /**
-   * Obtiene una sesión por ID.
-   * Retorna null si no existe o está expirada/revocada.
-   */
   get(sessionId: string): Session | null {
     const session = this.sessions.get(sessionId);
-
-    if (!session) {
-      return null;
-    }
-
-    if (session.status === "revoked") {
-      return null;
-    }
-
-    // Verificar expiración
-    if (new Date(session.expiresAt) < new Date()) {
-      session.status = "expired";
-      return null;
-    }
-
+    if (!session || session.status === "revoked") return null;
     return session;
   }
 
-  /**
-   * Busca una sesión activa por hash de API Key.
-   * Útil para reconectar sin pedir la key de nuevo.
-   */
   findByApiKeyHash(apiKeyHash: string): Session | null {
     for (const session of this.sessions.values()) {
-      if (session.apiKeyHash === apiKeyHash && session.status === "active") {
-        if (new Date(session.expiresAt) >= new Date()) {
-          return session;
-        }
-      }
+      if (session.apiKeyHash === apiKeyHash && session.status === "active") return session;
     }
     return null;
   }
 
-  /**
-   * Obtiene la primera sesión activa (para flujos single-session).
-   */
   getActiveSession(): Session | null {
     for (const session of this.sessions.values()) {
-      if (session.status === "active" && new Date(session.expiresAt) >= new Date()) {
-        return session;
-      }
+      if (session.status === "active") return session;
     }
     return null;
   }
 
-  /**
-   * Obtiene TODAS las sesiones activas.
-   * Usado en disconnectAll() para garantizar limpieza total.
-   */
   getAllActiveSessions(): Session[] {
-    const result: Session[] = [];
-    for (const session of this.sessions.values()) {
-      if (session.status === "active" && new Date(session.expiresAt) >= new Date()) {
-        result.push(session);
-      }
-    }
-    return result;
+    return Array.from(this.sessions.values()).filter((s) => s.status === "active");
   }
 
-  /**
-   * Renueva el acceso de una sesión (sliding expiration).
-   */
   touch(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session && session.status === "active") {
-      const now = new Date();
-      session.lastAccess = now.toISOString();
-      session.expiresAt = new Date(
-        now.getTime() + config.SESSION_TTL_HOURS * 60 * 60 * 1000
-      ).toISOString();
+      session.lastAccess = new Date().toISOString();
     }
   }
 
-  /**
-   * Revoca una sesión (cierre de sesión).
-   * Elimina la API Key cifrada por seguridad.
-   */
   revoke(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
-    if (!session) {
-      return false;
-    }
-
+    if (!session) return false;
     session.status = "revoked";
-    session.apiKeyEncrypted = ""; // Borrar la key cifrada
-    logger.info(`Sesión revocada: ${sessionId}`);
+    session.apiKeyEncrypted = "";
+    logger.info(`Sesion revocada: ${sessionId}`);
+    this.saveToFile();
     return true;
   }
 
-  /**
-   * Descifra y retorna la API Key de una sesión.
-   */
   getApiKey(sessionId: string): string | null {
     const session = this.get(sessionId);
-    if (!session || !session.apiKeyEncrypted) {
-      return null;
-    }
-    return decrypt(session.apiKeyEncrypted);
+    if (!session || !session.apiKeyEncrypted) return null;
+    try { return decrypt(session.apiKeyEncrypted); } catch { return null; }
   }
 
-  /**
-   * Retorna estadísticas de sesiones.
-   */
   stats(): { total: number; active: number; expired: number; revoked: number } {
-    let active = 0;
-    let expired = 0;
-    let revoked = 0;
-
+    let active = 0, expired = 0, revoked = 0;
     for (const session of this.sessions.values()) {
-      switch (session.status) {
-        case "active":
-          if (new Date(session.expiresAt) >= new Date()) {
-            active++;
-          } else {
-            expired++;
-          }
-          break;
-        case "expired":
-          expired++;
-          break;
-        case "revoked":
-          revoked++;
-          break;
-      }
+      if (session.status === "active") active++;
+      else if (session.status === "expired") expired++;
+      else if (session.status === "revoked") revoked++;
     }
-
     return { total: this.sessions.size, active, expired, revoked };
   }
 
-  /**
-   * Limpia sesiones expiradas o revocadas que tienen más de 48 horas.
-   */
   cleanup(): number {
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
     let removed = 0;
-
     for (const [id, session] of this.sessions.entries()) {
-      if (
-        (session.status === "expired" || session.status === "revoked") &&
-        new Date(session.lastAccess) < cutoff
-      ) {
+      if ((session.status === "revoked" || session.status === "expired") && new Date(session.lastAccess) < cutoff) {
         this.sessions.delete(id);
         removed++;
       }
     }
-
-    if (removed > 0) {
-      logger.info(`Cleanup: ${removed} sesiones eliminadas`);
-    }
-
+    if (removed > 0) { logger.info(`Cleanup: ${removed} sesion(es) antiguas eliminadas`); this.saveToFile(); }
     return removed;
   }
 
-  /**
-   * Inicia el intervalo de limpieza automática.
-   */
+  saveToFile(): void {
+    try {
+      const dir = dirname(this.storeFile);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const activeSessions = Array.from(this.sessions.values()).filter((s) => s.status === "active");
+      writeFileSync(this.storeFile, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), sessions: activeSessions }, null, 2), "utf8");
+    } catch (err) {
+      logger.error("SessionStore: error guardando en disco", { error: String(err) });
+    }
+  }
+
+  private loadFromFile(): void {
+    try {
+      if (!existsSync(this.storeFile)) { logger.debug("SessionStore: no existe archivo, comenzando vacio"); return; }
+      const raw = readFileSync(this.storeFile, "utf8");
+      const payload = JSON.parse(raw) as { version: number; sessions: Session[] };
+      if (payload.version !== 1 || !Array.isArray(payload.sessions)) { logger.warn("SessionStore: formato no reconocido, ignorando"); return; }
+      let loaded = 0;
+      for (const session of payload.sessions) {
+        if (session.sessionId && session.status === "active" && session.apiKeyEncrypted) {
+          session.expiresAt = null;
+          this.sessions.set(session.sessionId, session);
+          loaded++;
+        }
+      }
+      if (loaded > 0) logger.info(`SessionStore: ${loaded} sesion(es) restaurada(s) desde disco`);
+    } catch (err) {
+      logger.warn("SessionStore: error cargando desde disco, comenzando vacio", { error: String(err) });
+    }
+  }
+
   private startCleanup(): void {
-    this.cleanupInterval = setInterval(
-      () => this.cleanup(),
-      config.SESSION_CLEANUP_INTERVAL_MIN * 60 * 1000
-    );
-    // No bloquear el cierre del proceso
+    this.cleanupInterval = setInterval(() => this.cleanup(), config.SESSION_CLEANUP_INTERVAL_MIN * 60 * 1000);
     this.cleanupInterval.unref();
   }
 
-  /**
-   * Detiene la limpieza automática.
-   */
   destroy(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
+    if (this.cleanupInterval) { clearInterval(this.cleanupInterval); this.cleanupInterval = null; }
   }
 }
 
-// Singleton
 export const sessionStore = new SessionStore();
