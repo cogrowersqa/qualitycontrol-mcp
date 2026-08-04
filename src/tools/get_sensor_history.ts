@@ -1,4 +1,4 @@
-import { sessionManager } from "../sessions/manager.js";
+﻿import { sessionManager } from "../sessions/manager.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
 import { logger } from "../logger/index.js";
@@ -93,7 +93,7 @@ export const getSensorHistoryTool = {
     desglose_diario?: string;
     mostrar_lecturas?: string;
   }): Promise<ToolResult> {
-    const session = sessionManager.getActiveSession();
+    const session = sessionManager.getSession();
     if (!session) {
       return {
         content: [

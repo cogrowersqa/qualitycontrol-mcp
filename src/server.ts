@@ -28,10 +28,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { tools, executeTool } from "./tools/index.js";
+import { runWithApiKey } from "./tools/request-context.js";
 import { logger } from "./logger/index.js";
 import { apiClient } from "./api/client.js";
 import { sessionManager } from "./sessions/manager.js";
-import { isTokenRevoked, associateToken, clearRevoked, revokeAllTokens, getAuthVersion, restoreAuthVersion } from "./auth/token-store.js";
+import { isTokenRevoked, associateToken, clearRevoked, getAuthVersion, restoreAuthVersion } from "./auth/token-store.js";
 import { cacheManager } from "./cache/manager.js";
 
 // â”€â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -315,7 +316,7 @@ function extractDeviceCount(validation: Record<string, unknown>, devices: Record
 }
 
 // Authorization Endpoint â€” GET muestra formulario para ingresar API Key
-app.get("/authorize", (req, res) => {
+app.get("/authorize", async (req, res) => {
   const { client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type } = req.query as Record<string, string>;
 
   if (response_type !== "code") {
@@ -323,7 +324,46 @@ app.get("/authorize", (req, res) => {
     return;
   }
 
-  // Mostrar formulario de autenticaciÃ³n
+  // ── Auto-login: si client_id parece una API key, intentar validarla directamente ──
+  // El usuario puede poner su API key en el campo "OAuth Client ID" del conector de Claude.
+  // Si el client_id NO es un UUID registrado por /register, intentamos validarlo como API key.
+  const isRegisteredClient = registeredClients.has(client_id);
+  if (!isRegisteredClient && client_id && client_id.trim().length > 8) {
+    try {
+      const autoValidation = await apiClient.validateApiKey(client_id.trim());
+      if (autoValidation.success) {
+        // API key válida: auto-autorizar sin mostrar formulario
+        const normalized = autoValidation as Record<string, unknown>;
+        const devices = normalizeValidationItems(normalized);
+        const companyName = extractCompanyName(normalized, devices);
+        const deviceCount = extractDeviceCount(normalized, devices);
+
+        const code = randomUUID();
+        authCodes.set(code, {
+          clientId: client_id,
+          redirectUri: redirect_uri,
+          codeChallenge: code_challenge,
+          codeChallengeMethod: code_challenge_method,
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          apiKey: client_id.trim(),
+          companyName,
+          deviceCount,
+        });
+
+        const redirectUrl = new URL(redirect_uri);
+        redirectUrl.searchParams.set("code", code);
+        if (state) redirectUrl.searchParams.set("state", state);
+
+        logger.info(`OAuth: Auto-login exitoso para "${companyName}" usando client_id como API key`);
+        res.redirect(302, redirectUrl.toString());
+        return;
+      }
+    } catch {
+      // No era una API key válida, continuar con el formulario normal
+    }
+  }
+
+  // Mostrar formulario de autenticación
   res.type("html").send(`<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -489,8 +529,9 @@ app.post("/token", (req, res) => {
 
 // â”€â”€â”€ MCP Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// Middleware: verificar Bearer token en /mcp
-function validateBearerToken(req: express.Request, res: express.Response): boolean {
+// Middleware: verificar Bearer token en /mcp.
+// Devuelve tokenData si el token es válido, null si no (y ya envió 401).
+function validateBearerToken(req: express.Request, res: express.Response): TokenData | null {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     logger.debug("validateBearerToken: No hay Authorization header");
@@ -498,7 +539,7 @@ function validateBearerToken(req: express.Request, res: express.Response): boole
     res.status(401)
       .set("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl}"`)
       .json({ error: "unauthorized", error_description: "Bearer token required" });
-    return false;
+    return null;
   }
 
   const token = authHeader.slice(7);
@@ -515,20 +556,22 @@ function validateBearerToken(req: express.Request, res: express.Response): boole
     res.status(401)
       .set("WWW-Authenticate", `Bearer error="invalid_token", resource_metadata="${resourceMetadataUrl}"`)
       .json({ error: "invalid_token", error_description: "Token expired or invalid" });
-    return false;
+    return null;
   }
 
-  // Log de contexto: quÃ© empresa estÃ¡ usando este token
-  const activeSession = sessionManager.getActiveSession();
-  logger.debug(`validateBearerToken: OK [token_company=${tokenData.companyName}, active_session=${activeSession?.companyName ?? 'ninguna'}, session_id=${activeSession?.sessionId ?? 'N/A'}]`);
-
-  return true;
+  logger.debug(`validateBearerToken: OK [company=${tokenData.companyName ?? 'N/A'}]`);
+  return tokenData;
 }
 
 app.all("/mcp", async (req, res) => {
   try {
-    // Verificar autenticaciÃ³n
-    if (!validateBearerToken(req, res)) return;
+    // Verificar autenticación — devuelve tokenData o null (ya envió 401)
+    const tokenData = validateBearerToken(req, res);
+    if (!tokenData) return;
+
+    // Todas las operaciones siguientes corren dentro del contexto aislado de este token.
+    // AsyncLocalStorage garantiza que getRequestApiKey() devuelva la key de ESTE usuario.
+    await runWithApiKey(tokenData.apiKey ?? "", async () => {
 
     // Verificar si es una sesiÃ³n existente
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
@@ -565,41 +608,28 @@ app.all("/mcp", async (req, res) => {
 
     // Auto-conectar empresa si el token tiene API Key (del formulario OAuth)
     const bearerToken = req.headers.authorization?.slice(7);
-    if (bearerToken) {
-      const tokenData = accessTokens.get(bearerToken);
-      if (tokenData?.apiKey) {
-        try {
-          // Si hay sesiÃ³n activa de OTRA empresa, revocarla primero
-          const existingSession = sessionManager.getActiveSession();
-          if (existingSession) {
-            const existingApiKey = sessionManager.getApiKey(existingSession.sessionId);
-            if (existingApiKey && existingApiKey !== tokenData.apiKey) {
-              // Empresa diferente: limpiar todo antes de conectar la nueva
-              logger.info(`Cambio de empresa detectado: revocando sesiÃ³n anterior (${existingSession.companyName})`);
-              sessionManager.disconnectAll();
-            }
-          }
-
-          // Conectar la empresa del token (reutiliza si misma key, crea si nueva)
-          if (!sessionManager.hasActiveSession()) {
-            sessionManager.connectCompany(
-              tokenData.apiKey,
-              tokenData.companyName ?? null,
-              null, // userName
-              null, // role
-              tokenData.deviceCount ?? 0
-            );
-          }
-
-          // Asociar token con la sesiÃ³n para poder revocarlo desde disconnect
-          const activeSession = sessionManager.getActiveSession();
-          if (activeSession) {
-            associateToken(activeSession.sessionId, bearerToken);
-          }
-          logger.info(`Auto-conectada empresa "${tokenData.companyName}" (${tokenData.deviceCount} dispositivos) via OAuth`);
-        } catch (err) {
-          logger.warn("Error auto-conectando empresa", { error: err instanceof Error ? err.message : String(err) });
+    if (bearerToken && tokenData.apiKey) {
+      try {
+        // Auto-conectar: buscar sesión existente para ESTE usuario (por hash de su API key)
+        // No afecta ni comprueba sesiones de otros usuarios
+        const existingSession = sessionManager.getSession();
+        if (!existingSession) {
+          sessionManager.connectCompany(
+            tokenData.apiKey,
+            tokenData.companyName ?? null,
+            null,
+            null,
+            tokenData.deviceCount ?? 0
+          );
         }
+        // Asociar token con la sesión para poder revocarla desde disconnect
+        const mySession = sessionManager.getSession();
+        if (mySession) {
+          associateToken(mySession.sessionId, bearerToken);
+        }
+        logger.info(`Auto-conectada empresa "${tokenData.companyName}" via OAuth`);
+      } catch (err) {
+        logger.warn("Error auto-conectando empresa", { error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -607,9 +637,11 @@ app.all("/mcp", async (req, res) => {
       const sid = transport.sessionId;
       if (sid) {
         transports.delete(sid);
-        logger.info(`SesiÃ³n MCP cerrada: ${sid}`);
+        logger.info(`Sesión MCP cerrada: ${sid}`);
       }
     };
+
+    }); // fin runWithApiKey
   } catch (error) {
     logger.error("Error en /mcp", {
       error: error instanceof Error ? error.message : String(error),
@@ -627,30 +659,34 @@ app.all("/mcp", async (req, res) => {
  * Revoca tokens, elimina sesiones, limpia cachÃ©.
  * Garantiza que la prÃ³xima conexiÃ³n requiera nueva API Key.
  */
-app.post("/logout", (req, res) => {
+app.post("/logout", async (req, res) => {
   const bearerToken = req.headers.authorization?.slice(7);
+  const tokenData = bearerToken ? accessTokens.get(bearerToken) : undefined;
 
   logger.info("=== LOGOUT INICIADO ===");
 
-  // 1. Revocar todas las sesiones internas
-  const revokedSessions = sessionManager.disconnectAll();
-  logger.info(`Logout: ${revokedSessions} sesiÃ³n(es) revocadas`);
+  // 1. Revocar SOLO la sesión del usuario actual (no afecta a otros usuarios)
+  let revokedSessions = 0;
+  if (tokenData?.apiKey) {
+    // runWithApiKey hace que disconnectCurrent() encuentre la sesión correcta por API key
+    revokedSessions = await runWithApiKey(tokenData.apiKey, async () => {
+      return sessionManager.disconnectCurrent() ? 1 : 0;
+    });
+  }
+  logger.info(`Logout: ${revokedSessions} sesión(es) revocada(s) para este usuario`);
 
-  // 2. Revocar todos los tokens OAuth
-  revokeAllTokens();
-
-  // 3. Eliminar el token actual del mapa de acceso
+  // 2. Revocar SOLO el token OAuth actual (NO revokeAllTokens — no afectar otros usuarios)
   if (bearerToken) {
     accessTokens.delete(bearerToken);
     logger.info(`Logout: Token eliminado de accessTokens`);
   }
 
-  // Persistir el estado actualizado (sin los tokens revocados)
+  // Persistir el estado actualizado
   saveTokens();
 
-  // 4. Limpiar TODO el cachÃ©
+  // 3. Limpiar caché
   cacheManager.clear();
-  logger.info("Logout: CachÃ© limpiado completamente");
+  logger.info("Logout: Caché limpiado");
 
   // 5. Respuesta con headers anti-cachÃ©
   res.set({

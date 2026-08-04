@@ -1,4 +1,4 @@
-import { sessionManager } from "../sessions/manager.js";
+﻿import { sessionManager } from "../sessions/manager.js";
 import type { ToolResult } from "../types/index.js";
 
 export const companyInfoTool = {
@@ -13,7 +13,7 @@ export const companyInfoTool = {
   },
 
   async handler(_params: Record<string, never>): Promise<ToolResult> {
-    const session = sessionManager.getActiveSession();
+    const session = sessionManager.getSession();
 
     if (!session) {
       return {

@@ -2,6 +2,7 @@ import { sessionStore } from "./store.js";
 import { hashApiKey } from "../crypto/encryption.js";
 import { logger } from "../logger/index.js";
 import type { Session } from "../types/index.js";
+import { getRequestApiKey } from "../tools/request-context.js";
 
 /**
  * Manager de sesiones — lógica de alto nivel.
@@ -68,6 +69,49 @@ export class SessionManager {
    */
   getActiveSession(): Session | null {
     return sessionStore.getActiveSession();
+  }
+
+  /**
+   * Obtiene la sesión correspondiente a la request actual (por API key del token OAuth).
+   * Es la forma correcta de obtener la sesión en un servidor multi-usuario.
+   * Busca por hash de la API key inyectada por runWithApiKey() en server.ts.
+   * Fallback: primera sesión activa (compatible con flujo de un solo usuario).
+   */
+  getSession(): Session | null {
+    const apiKey = getRequestApiKey();
+    if (apiKey) {
+      const hash = hashApiKey(apiKey);
+      const byKey = sessionStore.findByApiKeyHash(hash);
+      if (byKey) return byKey;
+    }
+    return sessionStore.getActiveSession();
+  }
+
+  /**
+   * Verifica si hay sesión activa para la request actual.
+   */
+  hasSession(): boolean {
+    return this.getSession() !== null;
+  }
+
+  /**
+   * Desconecta solo la sesión de la request actual (por API key del token).
+   * No afecta a otros usuarios conectados simultáneamente.
+   */
+  disconnectCurrent(): boolean {
+    const apiKey = getRequestApiKey();
+    if (!apiKey) return false;
+    const hash = hashApiKey(apiKey);
+    const session = sessionStore.findByApiKeyHash(hash);
+    if (!session) return false;
+    return sessionStore.revoke(session.sessionId);
+  }
+
+  /**
+   * Obtiene la API key de la request actual (desde AsyncLocalStorage).
+   */
+  getApiKeyForCurrentRequest(): string | null {
+    return getRequestApiKey();
   }
 
   /**

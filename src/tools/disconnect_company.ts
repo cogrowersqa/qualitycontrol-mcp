@@ -1,15 +1,16 @@
-import { sessionManager } from "../sessions/manager.js";
+﻿import { sessionManager } from "../sessions/manager.js";
 import { cacheManager } from "../cache/manager.js";
 import { logger } from "../logger/index.js";
-import { revokeAllTokens } from "../auth/token-store.js";
 import type { ToolResult } from "../types/index.js";
 
 export const disconnectCompanyTool = {
   name: "qc_disconnect",
   description:
-    "Desconecta la empresa actual del sistema **QualityControl** y cierra la sesión completamente. " +
-    "Revoca tokens de QualityControl, limpia caché de QualityControl y fuerza re-autenticación. " +
-    "Usar únicamente cuando el usuario quiere cerrar sesión en QualityControl o cambiar de empresa en QualityControl. " +
+    "Cierra la sesión activa de QualityControl y limpia el caché del servidor. " +
+    "Úsala para refrescar la conexión, limpiar datos en caché o cuando el usuario quiere reiniciar el contexto de QualityControl. " +
+    "IMPORTANTE: si el conector fue configurado con un 'OAuth Client ID' (API key directa), Claude se reconectará automáticamente " +
+    "a la misma empresa al usar cualquier herramienta. Para cambiar de empresa o cerrar sesión completamente, " +
+    "el usuario debe ir a Configuración → Conectores → editar el conector y cambiar el OAuth Client ID. " +
     "NO afecta otras aplicaciones como AgroClimate.",
   inputSchema: {
     type: "object" as const,
@@ -18,7 +19,7 @@ export const disconnectCompanyTool = {
   },
 
   async handler(_params: Record<string, never>): Promise<ToolResult> {
-    const session = sessionManager.getActiveSession();
+    const session = sessionManager.getSession();
 
     if (!session) {
       return {
@@ -40,17 +41,13 @@ export const disconnectCompanyTool = {
     cacheManager.invalidateSession(sessionId);
     logger.info(`Disconnect: Caché de sesión ${sessionId} invalidado`);
 
-    // 2. Revocar TODAS las sesiones
-    sessionManager.disconnectAll();
-    logger.info("Disconnect: Todas las sesiones revocadas");
+    // 2. Revocar SOLO la sesión del usuario actual (no afecta a otros usuarios)
+    sessionManager.disconnectCurrent();
+    logger.info("Disconnect: Sesión del usuario actual revocada");
 
-    // 3. Revocar TODOS los tokens OAuth → fuerza re-auth en la siguiente request
-    revokeAllTokens();
-    logger.info("Disconnect: Todos los tokens revocados, re-auth flag activado");
-
-    // 4. Limpiar todo el caché global
+    // 3. Limpiar caché
     cacheManager.clear();
-    logger.info("Disconnect: Caché global limpiado");
+    logger.info("Disconnect: Caché limpiado");
 
     logger.info("=== DISCONNECT COMPLETADO ===");
 

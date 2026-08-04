@@ -1,4 +1,4 @@
-import { getInspectionsTool } from "./get_inspections.js";
+﻿import { getInspectionsTool } from "./get_inspections.js";
 import { getInspectionByIdTool } from "./get_inspection_by_id.js";
 import { getQualitySummaryTool } from "./get_quality_summary.js";
 import { connectCompanyTool } from "./connect_company.js";
@@ -52,7 +52,7 @@ export async function executeTool(
   }
 
   const startTime = Date.now();
-  const session = sessionManager.getActiveSession();
+  const session = sessionManager.getSession();
 
   try {
     logger.debug(`Tool call: ${name}`, { params: sanitizeParams(params) });

@@ -1,4 +1,4 @@
-import { sessionManager } from "../sessions/manager.js";
+﻿import { sessionManager } from "../sessions/manager.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
 import { config } from "../config/index.js";
@@ -21,7 +21,7 @@ export const getWeatherTool = {
   },
 
   async handler(params: { ubicacion?: string }): Promise<ToolResult> {
-    const session = sessionManager.getActiveSession();
+    const session = sessionManager.getSession();
     if (!session) {
       return {
         content: [

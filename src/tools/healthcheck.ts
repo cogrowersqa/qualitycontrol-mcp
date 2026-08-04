@@ -1,4 +1,4 @@
-import { apiClient } from "../api/client.js";
+﻿import { apiClient } from "../api/client.js";
 import { sessionManager } from "../sessions/manager.js";
 import { cacheManager } from "../cache/manager.js";
 import type { ToolResult } from "../types/index.js";
@@ -27,7 +27,7 @@ export const healthcheckTool = {
     text += `- **Sesiones revocadas:** ${sessionStats.revoked}\n`;
     text += `- **Caché:** ${cacheStats.entries}/${cacheStats.maxEntries} entradas\n`;
 
-    const session = sessionManager.getActiveSession();
+    const session = sessionManager.getSession();
     if (session) {
       text += `\n**Sesión actual:**\n`;
       text += `- Empresa: ${session.companyName ?? "N/A"}\n`;
