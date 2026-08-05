@@ -1,5 +1,6 @@
 ﻿import { sessionManager } from "../sessions/manager.js";
 import { cacheManager } from "../cache/manager.js";
+import { revokeSessionToken } from "../auth/token-store.js";
 import { logger } from "../logger/index.js";
 import type { ToolResult } from "../types/index.js";
 
@@ -41,7 +42,12 @@ export const disconnectCompanyTool = {
     cacheManager.invalidateSession(sessionId);
     logger.info(`Disconnect: Caché de sesión ${sessionId} invalidado`);
 
-    // 2. Revocar SOLO la sesión del usuario actual (no afecta a otros usuarios)
+    // 2. Revocar token OAuth — fuerza a Claude a re-autenticar en la próxima request
+    // Sin esto, Claude reutiliza el token viejo y se reconecta a la misma empresa.
+    revokeSessionToken(sessionId);
+    logger.info("Disconnect: Token OAuth revocado (Claude deberá re-autenticar)");
+
+    // 3. Revocar SOLO la sesión del usuario actual (no afecta a otros usuarios)
     sessionManager.disconnectCurrent();
     logger.info("Disconnect: Sesión del usuario actual revocada");
 

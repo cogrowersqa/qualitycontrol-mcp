@@ -1,4 +1,5 @@
 ﻿import { sessionManager } from "../sessions/manager.js";
+import { getRequestApiKey } from "./request-context.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
 import { config } from "../config/index.js";
@@ -32,21 +33,16 @@ export const getQualitySummaryTool = {
     desde?: string;
     hasta?: string;
   }): Promise<ToolResult> {
-    const session = sessionManager.getSession();
-    if (!session) {
-      return {
-        content: [{ type: "text", text: "No hay sesión activa. Llama a connect_company para iniciar sesión antes de obtener el resumen de calidad." }],
-        isError: true,
-      };
-    }
-
-    const apiKey = sessionManager.getApiKey(session.sessionId);
+    // API key: fuente primaria = token OAuth (AsyncLocalStorage)
+    const apiKey = getRequestApiKey();
     if (!apiKey) {
       return {
-        content: [{ type: "text", text: "Error de sesión. Reconéctate." }],
+        content: [{ type: "text", text: "No hay API Key en el contexto. Reconéctate desde Configuración → Conectores." }],
         isError: true,
       };
     }
+    // Sesión: opcional, para cacheKey y metadata
+    const session = sessionManager.getSession();
 
     // Default: mes actual
     const defaults = getDefaultDateRange();
@@ -55,7 +51,8 @@ export const getQualitySummaryTool = {
 
     const queryParams: Record<string, string> = { desde, hasta };
 
-    const cacheKey = cacheManager.buildKey(session.sessionId, "quality_summary", queryParams);
+    const cacheKeyId = session?.sessionId ?? apiKey.slice(-8);
+    const cacheKey = cacheManager.buildKey(cacheKeyId, "quality_summary", queryParams);
     const cached = cacheManager.get<string>(cacheKey);
     if (cached) {
       return { content: [{ type: "text", text: cached as unknown as string }] };

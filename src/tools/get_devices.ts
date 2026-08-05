@@ -1,4 +1,5 @@
 ﻿import { sessionManager } from "../sessions/manager.js";
+import { getRequestApiKey } from "./request-context.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
 import { config } from "../config/index.js";
@@ -50,26 +51,16 @@ export const getDevicesTool = {
     offset?: number;
     decode_json?: string;
   }): Promise<ToolResult> {
-    const session = sessionManager.getSession();
-    if (!session) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "No hay empresa conectada. Usa connect_company para conectar tu empresa primero.",
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const apiKey = sessionManager.getApiKey(session.sessionId);
+    // API key: fuente primaria = token OAuth (AsyncLocalStorage)
+    const apiKey = getRequestApiKey();
     if (!apiKey) {
       return {
-        content: [{ type: "text", text: "Error al recuperar la sesión. Reconéctate." }],
+        content: [{ type: "text", text: "No hay API Key en el contexto. Reconéctate desde Configuración → Conectores." }],
         isError: true,
       };
     }
+    // Sesión: opcional, para cacheKey
+    const session = sessionManager.getSession();
 
     const queryParams: Record<string, string> = {};
     if (params.desde?.trim()) queryParams.desde = params.desde.trim();
@@ -82,7 +73,8 @@ export const getDevicesTool = {
     }
 
     // Verificar caché
-    const cacheKey = cacheManager.buildKey(session.sessionId, "dispositivos", queryParams);
+    const cacheKeyId = session?.sessionId ?? apiKey.slice(-8);
+    const cacheKey = cacheManager.buildKey(cacheKeyId, "dispositivos", queryParams);
     const cached = cacheManager.get<GenericRecord>(cacheKey);
     if (cached) {
       return { content: buildFullPayloadContent(cached) };

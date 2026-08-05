@@ -1,4 +1,5 @@
 ﻿import { sessionManager } from "../sessions/manager.js";
+import { getRequestApiKey } from "./request-context.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
 import { config } from "../config/index.js";
@@ -27,26 +28,16 @@ export const getInspectionByIdTool = {
   },
 
   async handler(params: { id?: number }): Promise<ToolResult> {
-    const session = sessionManager.getSession();
-    if (!session) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "No hay sesión activa. Llama a qc_connect para iniciar sesión antes de consultar.",
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const apiKey = sessionManager.getApiKey(session.sessionId);
+    // API key: fuente primaria = token OAuth (AsyncLocalStorage)
+    const apiKey = getRequestApiKey();
     if (!apiKey) {
       return {
-        content: [{ type: "text", text: "Error de sesión. Reconéctate con qc_connect." }],
+        content: [{ type: "text", text: "No hay API Key en el contexto. Reconéctate desde Configuración → Conectores." }],
         isError: true,
       };
     }
+    // Sesión: opcional, para cacheKey y metadata
+    const session = sessionManager.getSession();
 
     const searchId = typeof params.id === "number" ? params.id : Number(params.id);
     if (!searchId || isNaN(searchId) || searchId <= 0) {
@@ -57,7 +48,8 @@ export const getInspectionByIdTool = {
     }
 
     // Clave de caché: todos los registros sin filtro de fecha (compartida con otras consultas sin fecha)
-    const cacheKey = cacheManager.buildKey(session.sessionId, "inspecciones-all", {});
+    const cacheKeyId = session?.sessionId ?? apiKey.slice(-8);
+    const cacheKey = cacheManager.buildKey(cacheKeyId, "inspecciones-all", {});
     let allRecords = cacheManager.get<InspectionRecord[]>(cacheKey);
 
     if (!allRecords) {

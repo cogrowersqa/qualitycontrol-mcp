@@ -1,4 +1,5 @@
 ﻿import { sessionManager } from "../sessions/manager.js";
+import { getRequestApiKey } from "./request-context.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
 import { logger } from "../logger/index.js";
@@ -93,23 +94,16 @@ export const getSensorHistoryTool = {
     desglose_diario?: string;
     mostrar_lecturas?: string;
   }): Promise<ToolResult> {
-    const session = sessionManager.getSession();
-    if (!session) {
-      return {
-        content: [
-          { type: "text", text: "No hay empresa conectada. Usa connect_company primero." },
-        ],
-        isError: true,
-      };
-    }
-
-    const apiKey = sessionManager.getApiKey(session.sessionId);
+    // API key: fuente primaria = token OAuth (AsyncLocalStorage)
+    const apiKey = getRequestApiKey();
     if (!apiKey) {
       return {
-        content: [{ type: "text", text: "Error al recuperar la sesión. Reconéctate." }],
+        content: [{ type: "text", text: "No hay API Key en el contexto. Reconéctate desde Configuración → Conectores." }],
         isError: true,
       };
     }
+    // Sesión: opcional
+    const session = sessionManager.getSession();
 
     // ─── 1. Definir rango solicitado ──────────────────────────────────────────
     const now = getNowInChile();
@@ -146,7 +140,7 @@ export const getSensorHistoryTool = {
 
     // ─── 2. Obtener historial del rango (con chunking mensual si aplica) ─────
     const historyResult = await fetchHistoryForRange(
-      session.sessionId,
+      session?.sessionId ?? apiKey.slice(-8),
       params.dispositivo,
       apiKey,
       desde,

@@ -36,6 +36,8 @@ const envSchema = z.object({
   // Persistencia en disco
   MCP_SESSION_STORE_FILE: z.string().default("./data/sessions.json"),
   MCP_TOKEN_STORE_FILE: z.string().default("./data/tokens.json"),
+  // Zona horaria para calcular fechas por defecto (ej: "America/Santiago")
+  TZ_OFFSET_HOURS: z.coerce.number().default(-4),
 });
 
 function loadConfig() {

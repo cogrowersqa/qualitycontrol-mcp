@@ -1,4 +1,5 @@
 ﻿import { sessionManager } from "../sessions/manager.js";
+import { getRequestApiKey } from "./request-context.js";
 import { apiClient } from "../api/client.js";
 import { cacheManager } from "../cache/manager.js";
 import { config } from "../config/index.js";
@@ -7,6 +8,12 @@ import type { ToolResult } from "../types/index.js";
 type InspectionRecord = Record<string, unknown>;
 
 const PAGE_SIZE = 100;
+
+/** Fecha local en zona horaria del servidor (offset configurable via TZ_OFFSET_HOURS). */
+function localDate(): Date {
+  const now = new Date();
+  return new Date(now.getTime() + config.TZ_OFFSET_HOURS * 60 * 60 * 1000);
+}
 
 export const getInspectionsTool = {
   name: "qc_get_inspections",
@@ -48,21 +55,17 @@ export const getInspectionsTool = {
     offset?: number;
     decode_json?: string;
   }): Promise<ToolResult> {
-    const session = sessionManager.getSession();
-    if (!session) {
-      return {
-        content: [{ type: "text", text: "No hay sesión activa. Llama a connect_company para iniciar sesión antes de consultar las inspecciones." }],
-        isError: true,
-      };
-    }
-
-    const apiKey = sessionManager.getApiKey(session.sessionId);
+    // API key: fuente primaria = token OAuth (siempre disponible via AsyncLocalStorage)
+    // No dependemos de que la sesión exista para tener la key.
+    const apiKey = getRequestApiKey();
     if (!apiKey) {
       return {
-        content: [{ type: "text", text: "Error de sesión. Reconéctate." }],
+        content: [{ type: "text", text: "No hay API Key en el contexto. Reconéctate desde Configuración → Conectores." }],
         isError: true,
       };
     }
+    // Sesión: opcional, usada para cacheKey y metadata
+    const session = sessionManager.getSession();
 
     // Default: mes actual
     const defaults = getDefaultDateRange();
@@ -73,7 +76,8 @@ export const getInspectionsTool = {
     const queryParams: Record<string, string> = { desde, hasta };
 
     // Clave de caché por rango (sin offset — cacheamos la respuesta completa del API)
-    const cacheKey = cacheManager.buildKey(session.sessionId, "inspecciones", queryParams);
+    const cacheKeyId = session?.sessionId ?? apiKey.slice(-8);
+    const cacheKey = cacheManager.buildKey(cacheKeyId, "inspecciones", queryParams);
     let payload = cacheManager.get<Record<string, unknown>>(cacheKey);
 
     if (!payload) {
@@ -100,10 +104,10 @@ export const getInspectionsTool = {
 };
 
 function getDefaultDateRange(): { desde: string; hasta: string } {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
+  const now = localDate();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(now.getUTCDate()).padStart(2, "0");
   return { desde: `${y}-${m}-01`, hasta: `${y}-${m}-${d}` };
 }
 

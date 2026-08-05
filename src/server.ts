@@ -110,6 +110,19 @@ if (BASE_PATH !== "/") {
   app.use(`${BASE_PATH}/assets`, express.static(ASSETS_DIR));
 }
 
+// ── Normalización de rutas: elimina BASE_PATH si Apache lo pasa completo ────
+// Algunos configs de Apache no strippean el prefijo al hacer proxy.
+// Ej: /mcp/qualitycontrol/authorize → /authorize
+// Si Apache SÍ lo strippea, la URL ya llega como /authorize → no se modifica.
+if (BASE_PATH !== "/") {
+  app.use((req, _res, next) => {
+    if (req.url === BASE_PATH || req.url.startsWith(BASE_PATH + "/")) {
+      req.url = req.url.slice(BASE_PATH.length) || "/";
+    }
+    next();
+  });
+}
+
 // Map de sesiones activas: sessionId â†’ transport
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
