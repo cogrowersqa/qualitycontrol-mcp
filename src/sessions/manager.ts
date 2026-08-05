@@ -81,10 +81,10 @@ export class SessionManager {
     const apiKey = getRequestApiKey();
     if (apiKey) {
       const hash = hashApiKey(apiKey);
-      const byKey = sessionStore.findByApiKeyHash(hash);
-      if (byKey) return byKey;
+      return sessionStore.findByApiKeyHash(hash);
     }
-    return sessionStore.getActiveSession();
+    // Sin contexto de request (llamada fuera de un handler MCP) → sin sesión
+    return null;
   }
 
   /**
